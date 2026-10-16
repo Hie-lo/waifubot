@@ -96,6 +96,30 @@ class PTBGateway:
             )
         return msg.message_id
 
+    async def send_media_group(
+        self,
+        chat_id: int | str,
+        items: list[tuple[Path, bool]],
+        caption: str = "",
+    ) -> list[int]:
+        from contextlib import ExitStack
+
+        from telegram import InputMediaPhoto
+
+        with ExitStack() as stack:
+            media = []
+            for i, (path, spoiler) in enumerate(items):
+                fh = stack.enter_context(open(path, "rb"))
+                media.append(
+                    InputMediaPhoto(
+                        media=fh,
+                        caption=(caption or None) if i == 0 else None,
+                        has_spoiler=bool(spoiler),
+                    )
+                )
+            msgs = await self._require().send_media_group(chat_id=chat_id, media=media)
+        return [m.message_id for m in msgs]
+
     async def send_document(
         self, chat_id: int | str, doc_path: Path, caption: str = "", buttons: object = None
     ) -> int:

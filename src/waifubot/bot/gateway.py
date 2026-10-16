@@ -42,6 +42,18 @@ class TelegramGateway(Protocol):
         """Send a file as a document (lossless); returns its message_id."""
         ...
 
+    async def send_media_group(
+        self,
+        chat_id: int | str,
+        items: list[tuple[Path, bool]],
+        caption: str = "",
+    ) -> list[int]:
+        """Send 2-10 photos as one album (media group). `items` is a list of
+        (photo_path, spoiler) — spoiler is PER PHOTO (a group may mix NSFW and
+        normal images, user rule 2026-10-16). Caption goes on the first item.
+        Returns the message ids in order."""
+        ...
+
     async def edit_message(
         self, chat_id: int | str, message_id: int, text: str, buttons: Buttons | None = None
     ) -> None:

@@ -209,6 +209,7 @@ class GenerationWorker:
                             (self._msgs.t("review_reject"), f"rej:{img.id}"),
                         ],
                         [(self._msgs.t("save_character"), f"savec:{job.id}")],
+                        [(self._msgs.t("nsfw_mark"), f"nsfw:{img.id}")],
                     ]
                     await self._gateway.send_photo(
                         admin_id, path, caption=caption, buttons=buttons

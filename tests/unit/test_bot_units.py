@@ -77,6 +77,8 @@ def _make_image(tmp_path: Path, job_id: int, **kw) -> Image:  # noqa: ANN001
     path = tmp_path / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    import hashlib
+
     return Image(
         job_id=job_id,
         provider="mock",
@@ -85,7 +87,7 @@ def _make_image(tmp_path: Path, job_id: int, **kw) -> Image:  # noqa: ANN001
         width=kw.get("width", 512),
         height=kw.get("height", 512),
         file_size=kw.get("file_size", 10),
-        sha256="a" * 64,
+        sha256=hashlib.sha256(f"{job_id}:{rel}".encode()).hexdigest(),
         status=kw.get("status", "approved"),
     )
 

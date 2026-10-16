@@ -23,7 +23,7 @@ from waifubot.bot.auth import AdminGate
 from waifubot.bot.gateway import Buttons, TelegramGateway
 from waifubot.bot.memory import DialogMemory
 from waifubot.bot.messages import Messages
-from waifubot.bot.posting import publish_image, resolve_unknown_send
+from waifubot.bot.posting import publish_group, publish_image, resolve_unknown_send
 from waifubot.bot.worker import GenerationWorker
 from waifubot.core.admin_settings import AdminSettings
 from waifubot.core.content_safety import validate_adult_identity
@@ -118,6 +118,20 @@ class BotApp:
                 await self._cb_save_character(inb, data)
             elif data.startswith("menu:"):
                 await self._cb_menu(inb, data)
+            elif data.startswith("view:"):
+                await self._cb_view(inb, data)
+            elif data.startswith("nsfw:"):
+                await self._cb_nsfw(inb, data)
+            elif data in ("grp", "gnext", "gok") or data.startswith("gtog:"):
+                await self._cb_group(inb, data)
+            elif data.startswith("gskip"):
+                await self._cb_group(inb, "gskip")
+            elif data.startswith("cancel:"):
+                await self._cb_cancel_job(inb, data)
+            elif data.startswith("usechar:"):
+                await self._cb_usechar(inb, data)
+            elif data.startswith("char:"):
+                await self._cb_char(inb, data)
             elif data.startswith("pub:"):
                 await self._cb_publish(inb, data)
             elif data.startswith("res:"):
@@ -188,9 +202,15 @@ class BotApp:
     async def _cmd_status(self, inb: Inbound) -> None:
         stats = await self._worker.queue_stats()
         paused = self._worker.paused
+        buttons: Buttons | None = None
+        if paused:
+            buttons = [[(self._msgs.t("menu_resume"), "menu:resume")]]
+        elif stats.get("pending") or stats.get("running"):
+            buttons = [[(self._msgs.t("menu_pause"), "menu:pause")]]
         await self._gw.send_message(
             inb.chat_id,
             self._msgs.t("status_paused" if paused else "status_running"),
+            buttons=buttons,
         )
         await self._gw.send_message(
             inb.chat_id,
@@ -279,25 +299,43 @@ class BotApp:
         if not jobs:
             await self._gw.send_message(inb.chat_id, self._msgs.t("queue_empty"))
             return
-        for job in jobs:
-            await self._gw.send_message(
-                inb.chat_id,
-                self._msgs.t(
-                    "queue_item", job_id=job.id, status=job.status,
-                    attempt=job.attempt_count, max=job.max_attempts,
-                    error=job.error_code or "-",
-                ),
+        lines = [
+            self._msgs.t(
+                "queue_item", job_id=job.id, status=job.status,
+                attempt=job.attempt_count, max=job.max_attempts,
+                error=job.error_code or "-",
             )
+            for job in jobs
+        ]
+        buttons: Buttons = []
+        cancelable = [j for j in jobs if j.status == "pending"]
+        if cancelable:
+            buttons.append(
+                [(self._msgs.t("queue_cancel") + f" #{j.id}", f"cancel:{j.id}")
+                 for j in cancelable[:5]]
+            )
+        buttons.append([(self._msgs.t("queue_refresh"), "menu:queue")])
+        await self._gw.send_message(inb.chat_id, "\n".join(lines), buttons=buttons)
 
     async def _cmd_pool(self, inb: Inbound) -> None:
         images = await self._pool_images()
         if not images:
             await self._gw.send_message(inb.chat_id, self._msgs.t("pool_empty"))
             return
-        for img in images:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("pool_item", image_id=img.id, status=img.status)
-            )
+        lines = [
+            self._msgs.t("pool_item", image_id=img.id, status=img.status)
+            for img in images
+        ]
+        buttons: Buttons = [
+            [(self._msgs.t("pool_view"), f"view:pool:{images[0].id}")],
+            [(self._msgs.t("pool_group"), "grp"),
+             (self._msgs.t("publish_pick_short"), "menu:publish")],
+        ]
+        await self._gw.send_message(
+            inb.chat_id,
+            self._msgs.t("pool_summary", count=len(images)) + "\n" + "\n".join(lines),
+            buttons=buttons,
+        )
 
     async def _pool_images(self) -> list[Image]:
         async with self._sessions() as s:
@@ -338,19 +376,283 @@ class BotApp:
     async def _cmd_characters(self, inb: Inbound) -> None:
         async with self._sessions() as s:
             rows = (
-                await s.execute(select(Character).order_by(Character.id.desc()).limit(20))
+                await s.execute(
+                    select(Character).where(Character.is_active.is_(True))
+                    .order_by(Character.id.desc()).limit(20)
+                )
             ).scalars().all()
         if not rows:
             await self._gw.send_message(inb.chat_id, self._msgs.t("characters_empty"))
             return
-        for row in rows:
+        list_rows = [(f"👤 {r.name} (v{r.version})", f"char:{r.id}") for r in rows]
+        await self._gw.send_message(
+            inb.chat_id, self._msgs.t("characters_title"), buttons=_chunk(list_rows)
+        )
+
+    # ---- one-by-one viewer / NSFW / group post / jobs / characters ---------
+    async def _scope_ids(self, scope: str) -> list[int]:
+        status = "approved" if scope == "pool" else "pending_review"
+        async with self._sessions() as s:
+            rows = (
+                await s.execute(
+                    select(Image.id).where(Image.status == status)
+                    .order_by(Image.id.asc()).limit(50)
+                )
+            ).all()
+        return [r[0] for r in rows]
+
+    async def _cb_view(self, inb: Inbound, data: str) -> None:
+        parts = data.split(":")
+        if parts[1] == "x":
+            await self._safe_answer(inb)
+            return
+        scope, raw_id = parts[1], parts[2]
+        ids = await self._scope_ids(scope)
+        if not ids:
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+            return
+        image_id = int(raw_id)
+        if image_id not in ids:
+            image_id = ids[0]
+        pos = ids.index(image_id)
+        async with self._sessions() as s:
+            img = await s.get(Image, image_id)
+            if img is None:
+                await s.commit()
+                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+                return
+            name = await self._image_name(s, img)
+            job_id = img.job_id
+            is_nsfw = bool(img.is_nsfw)
+            file_path = img.file_path
+        await self._safe_answer(inb)
+        nav: list[tuple[str, str]] = []
+        if pos > 0:
+            nav.append((self._msgs.t("view_prev"), f"view:{scope}:{ids[pos - 1]}"))
+        if pos < len(ids) - 1:
+            nav.append((self._msgs.t("view_next"), f"view:{scope}:{ids[pos + 1]}"))
+        buttons: Buttons = [nav] if nav else []
+        buttons.append([
+            (self._msgs.t("nsfw_unmark" if is_nsfw else "nsfw_mark"), f"nsfw:{image_id}"),
+        ])
+        if scope == "pool":
+            buttons.append([
+                (self._msgs.t("publish_pick_short"), f"pub:{image_id}"),
+                (self._msgs.t("delete_button"), f"del:{image_id}"),
+            ])
+        else:
+            buttons.append([
+                (self._msgs.t("review_approve"), f"appr:{image_id}"),
+                (self._msgs.t("review_reject"), f"rej:{image_id}"),
+            ])
+            buttons.append([(self._msgs.t("save_character"), f"savec:{job_id}")])
+        buttons.append([(self._msgs.t("view_close"), "view:x")])
+        path = f"{self._cfg.storage_root}/{file_path}"
+        caption = self._msgs.t(
+            "view_item", image_id=image_id, job_id=job_id,
+            pos=pos + 1, total=len(ids), name=name,
+            nsfw=self._msgs.t("nsfw_yes" if is_nsfw else "nsfw_no"),
+        )
+        try:
+            await self._gw.send_photo(inb.chat_id, path, caption=caption, buttons=buttons)
+        except Exception:  # noqa: BLE001
+            log.warning("viewer failed (image=%s)", image_id)
+
+    async def _cb_nsfw(self, inb: Inbound, data: str) -> None:
+        image_id = int(data.split(":")[1])
+        async with self._sessions() as s:
+            img = await s.get(Image, image_id)
+            if img is None:
+                await s.commit()
+                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+                return
+            img.is_nsfw = not bool(img.is_nsfw)
+            state = img.is_nsfw
+            await s.commit()
+        await self._safe_answer(inb)
+        await self._gw.send_message(
+            inb.chat_id,
+            self._msgs.t("nsfw_set" if state else "nsfw_unset", image_id=image_id),
+        )
+
+    # ---- group post wizard -------------------------------------------------
+    async def _cb_group(self, inb: Inbound, data: str) -> None:
+        if data == "grp":
+            ids = await self._scope_ids("pool")
+            if len(ids) < 2:
+                await self._safe_answer(inb)
+                await self._gw.send_message(inb.chat_id, self._msgs.t("group_too_few"))
+                return
+            dialog = {"kind": "group", "step": "pick", "selected": []}
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            msg_id = await self._send_group_picker(inb, dialog)
+            dialog["msg_id"] = msg_id
+            await self._memory.set(inb.user_id, dialog)
+            return
+        dialog = await self._memory.get(inb.user_id)
+        if not dialog or dialog.get("kind") != "group":
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+            return
+        if data.startswith("gtog:"):
+            image_id = int(data.split(":")[1])
+            selected: list[int] = list(dialog.get("selected") or [])
+            if image_id in selected:
+                selected.remove(image_id)
+            else:
+                if len(selected) >= 10:
+                    await self._safe_answer(inb, self._msgs.t("group_too_many"))
+                    return
+                selected.append(image_id)
+            dialog["selected"] = sorted(selected)
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._send_group_picker(inb, dialog, edit=True)
+        elif data == "gnext":
+            selected = dialog.get("selected") or []
+            if len(selected) < 2:
+                await self._safe_answer(inb, self._msgs.t("group_too_few"))
+                return
+            dialog["step"] = "caption"
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            buttons: Buttons = [[(self._msgs.t("group_skip"), "gskip")]]
             await self._gw.send_message(
-                inb.chat_id,
-                self._msgs.t(
-                    "characters_item", name=row.name, version=row.version,
-                    identity=row.identity_prompt[:80],
-                ),
+                inb.chat_id, self._msgs.t("group_caption_ask"), buttons=buttons
             )
+        elif data == "gskip":
+            dialog["caption"] = ""
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._group_confirm(inb, dialog)
+        elif data == "gok":
+            await self._safe_answer(inb)
+            await self._group_send(inb, dialog)
+
+    async def _send_group_picker(
+        self, inb: Inbound, dialog: dict, edit: bool = False
+    ) -> int | None:
+        ids = await self._scope_ids("pool")
+        selected = set(dialog.get("selected") or [])
+        rows: Buttons = []
+        row: list[tuple[str, str]] = []
+        for image_id in ids:
+            mark = "✅" if image_id in selected else "○"
+            row.append((f"{mark} #{image_id}", f"gtog:{image_id}"))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([(self._msgs.t("group_next"), "gnext"),
+                     (self._msgs.t("wiz_cancel"), "wiz:x")])
+        text = self._msgs.t("group_title") + "\n" + self._msgs.t(
+            "group_selected", count=len(selected)
+        )
+        if edit and dialog.get("msg_id"):
+            await self._gw.edit_message(
+                inb.chat_id, dialog["msg_id"], text, buttons=rows
+            )
+            return dialog["msg_id"]
+        return await self._gw.send_message(inb.chat_id, text, buttons=rows)
+
+    async def _group_confirm(self, inb: Inbound, dialog: dict) -> None:
+        dialog["step"] = "confirm"
+        await self._memory.set(inb.user_id, dialog)
+        buttons: Buttons = [
+            [(self._msgs.t("group_do"), "gok"),
+             (self._msgs.t("wiz_cancel"), "wiz:x")],
+        ]
+        caption = dialog.get("caption") or self._msgs.t("group_skip")
+        await self._gw.send_message(
+            inb.chat_id,
+            self._msgs.t("group_confirm", count=len(dialog.get("selected") or []))
+            + f"\n\n{self._msgs.t('group_caption_label')}: {caption}",
+            buttons=buttons,
+        )
+
+    async def _group_send(self, inb: Inbound, dialog: dict) -> None:
+        selected = dialog.get("selected") or []
+        if not 2 <= len(selected) <= 10:
+            await self._gw.send_message(inb.chat_id, self._msgs.t("group_too_few"))
+            return
+        async with self._sessions() as s:
+            images = (
+                (await s.execute(select(Image).where(Image.id.in_(selected))))
+                .scalars().all()
+            )
+            images = [i for i in images if i.status == "approved"]
+            if len(images) < 2:
+                await s.commit()
+                await self._gw.send_message(inb.chat_id, self._msgs.t("group_too_few"))
+                return
+            outcomes = await publish_group(
+                s, self._gw, images=images,
+                chat_id=self._cfg.dest_chat_id,
+                caption=dialog.get("caption") or "",
+                storage_root=Path(self._cfg.storage_root),
+            )
+            await s.commit()
+        await self._memory.clear(inb.user_id)
+        sent = sum(1 for o in outcomes if o.status == "sent")
+        await self._gw.send_message(
+            inb.chat_id, self._msgs.t("group_done", count=len(images), sent=sent)
+        )
+
+    async def _cb_cancel_job(self, inb: Inbound, data: str) -> None:
+        job_id = int(data.split(":")[1])
+        async with self._sessions() as s:
+            job = await s.get(Job, job_id)
+            if job is None or job.status != "pending":
+                await s.commit()
+                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+                return
+            job.status = "cancelled"
+            job.error_code = "cancelled_by_admin"
+            await s.commit()
+        await self._safe_answer(inb)
+        await self._gw.send_message(inb.chat_id, self._msgs.t("queue_cancelled", job_id=job_id))
+
+    async def _cb_char(self, inb: Inbound, data: str) -> None:
+        char_id = int(data.split(":")[1])
+        async with self._sessions() as s:
+            row = await s.get(Character, char_id)
+            await s.commit()
+        if row is None:
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+            return
+        await self._safe_answer(inb)
+        buttons: Buttons = [
+            [(self._msgs.t("char_generate"), f"usechar:{char_id}")],
+            [(self._msgs.t("view_close"), "view:x")],
+        ]
+        await self._gw.send_message(
+            inb.chat_id,
+            self._msgs.t(
+                "char_detail_title", name=row.name, version=row.version
+            ) + f"\n\n{row.identity_prompt}",
+            buttons=buttons,
+        )
+
+    async def _cb_usechar(self, inb: Inbound, data: str) -> None:
+        char_id = int(data.split(":")[1])
+        async with self._sessions() as s:
+            row = await s.get(Character, char_id)
+            await s.commit()
+        if row is None or not row.is_active:
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+            return
+        await self._memory.set(
+            inb.user_id,
+            {"kind": "generate", "step": "count", "style_key": "",
+             "character_id": char_id},
+        )
+        await self._safe_answer(inb)
+        await self._gw.send_message(
+            inb.chat_id,
+            self._msgs.t("char_using", name=row.name),
+        )
+        await self._ask_count(inb)
 
     # ---- wizard -----------------------------------------------------------
     async def _cb_wizard(self, inb: Inbound, data: str) -> None:
@@ -366,7 +668,7 @@ class BotApp:
             return
         if part == "s":
             key = data.split(":", 2)[2]
-            dialog["style_key"] = "" if key == "rnd" else key
+            dialog["style_key"] = key  # "rnd" = explicit random; else a style key
             dialog["step"] = "character"
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
@@ -444,12 +746,18 @@ class BotApp:
     async def _confirm_generate(self, inb: Inbound, dialog: dict) -> None:
         try:
             style_key = dialog.get("style_key") or ""
-            if style_key and style_key in self._cfg.style_values:
+            if style_key == "rnd" and self._cfg.style_values:
+                # explicit "random style" button
+                style_key, style_value = random.choice(
+                    list(self._cfg.style_values.items())
+                )
+            elif style_key and style_key in self._cfg.style_values:
                 style_value = self._cfg.style_values[style_key]
-            elif self._cfg.style_values:
-                style_key, style_value = random.choice(list(self._cfg.style_values.items()))
             else:
-                style_value = ""
+                # no style chosen (e.g. started from a character): the
+                # admin's default_style setting decides — never surprise-random
+                style_key = await self._settings.get("default_style") or ""
+                style_value = self._cfg.style_values.get(style_key, "")
             character_id = dialog.get("character_id")
             identity = dialog.get("identity") or ""
             style_lock: str | None = None
@@ -521,6 +829,10 @@ class BotApp:
             await self._savec_input(inb, dialog, text)
         elif kind == "set":
             await self._set_input(inb, dialog, text)
+        elif kind == "group" and dialog.get("step") == "caption":
+            dialog["caption"] = text[:1024]
+            await self._memory.set(inb.user_id, dialog)
+            await self._group_confirm(inb, dialog)
         else:
             await self._memory.clear(inb.user_id)
 
@@ -725,7 +1037,16 @@ class BotApp:
         rows = [
             (self._msgs.t(f"menu_{key}"), f"menu:{key}")
             for key in self.MENU_MAP
+            if key not in ("pause", "resume")
         ]
+        # Pause/Resume only where relevant (user 2026-10-16):
+        # resume only while paused; pause only while work is happening.
+        stats = await self._worker.queue_stats()
+        busy = bool(stats.get("pending") or stats.get("running"))
+        if self._worker.paused:
+            rows.append((self._msgs.t("menu_resume"), "menu:resume"))
+        elif busy:
+            rows.append((self._msgs.t("menu_pause"), "menu:pause"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("menu_title"), buttons=_chunk(rows)
         )
@@ -781,7 +1102,7 @@ class BotApp:
                 image=img,
                 chat_id=self._cfg.dest_chat_id,
                 caption=self._msgs.t("post_caption", name=name),
-                spoiler=self._cfg.allow_nsfw,
+                spoiler=bool(img.is_nsfw),
                 storage_root=Path(self._cfg.storage_root),
             )
             await s.commit()

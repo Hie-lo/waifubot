@@ -360,7 +360,7 @@ def test_precise_face_prompt_wizard_and_menu(env: Env) -> None:
         async with env.factory() as s:
             row = (await s.execute(select(Character))).scalars().one()
         assert row.name == "Sakura"
-        assert row.identity_prompt.startswith("adult woman, 25 years old")
+        assert row.identity_prompt.startswith("25 years old")
         assert "black ponytail hair" in row.identity_prompt
         assert "green eyes" in row.identity_prompt
         assert "oval face" in row.identity_prompt
@@ -381,5 +381,159 @@ def test_settings_fully_changeable_by_admin(env: Env) -> None:
         await env.app.handle_callback(env.cb("set:images_per_job", update_id=4))
         await env.app.handle_message(env.msg("20", update_id=5))
         assert await env.settings.get("images_per_job") == 20
+
+    _run(body())
+
+
+def test_group_post_mixed_spoiler_and_caption(env: Env) -> None:
+    """User rule 2026-10-16: albums carry per-photo spoiler (NSFW mix), and the
+    caption is set in the bot before posting."""
+
+    async def body() -> None:
+        # two approved images; mark the second NSFW via its preview button
+        async with env.factory() as s:
+            j = Job(status="succeeded", idempotency_key="g1", prompt_snapshot="p",
+                    template_version="t", filters_json="{}")
+            s.add(j)
+            await s.flush()
+            from tests.unit.test_bot_units import _make_image
+            store = env.tmp_path / "storage"
+            a = _make_image(store, j.id, file_path="images/a.png")
+            b = _make_image(store, j.id, file_path="images/b.png")
+            s.add_all([a, b])
+            await s.commit()
+            a_id, b_id = a.id, b.id
+        await env.app.handle_callback(env.cb(f"nsfw:{b_id}", update_id=1))
+        async with env.factory() as s:
+            img = await s.get(Image, b_id)
+            assert img.is_nsfw is True
+
+        # group wizard: pick both -> caption -> confirm -> send
+        await env.app.handle_callback(env.cb("grp", update_id=2))
+        await env.app.handle_callback(env.cb(f"gtog:{a_id}", update_id=3))
+        await env.app.handle_callback(env.cb(f"gtog:{b_id}", update_id=4))
+        await env.app.handle_callback(env.cb("gnext", update_id=5))
+        await env.app.handle_message(env.msg("New set!", update_id=6))
+        await env.app.handle_callback(env.cb("gok", update_id=7))
+
+        assert len(env.gw.media_groups) == 1
+        _chat, items, caption = env.gw.media_groups[0]
+        assert caption == "New set!"
+        assert [spoiler for _p, spoiler in items] == [False, True]  # mixed!
+        async with env.factory() as s:
+            posts = (await s.execute(select(Post))).scalars().all()
+            assert len(posts) == 2
+            assert all(p.status == "sent" for p in posts)
+            imgs = (await s.execute(select(Image))).scalars().all()
+            assert all(i.status == "published" for i in imgs)
+
+    _run(body())
+
+
+def test_pool_viewer_and_pause_menu_context(env: Env) -> None:
+    async def body() -> None:
+        async with env.factory() as s:
+            j = Job(status="succeeded", idempotency_key="v1", prompt_snapshot="p",
+                    template_version="t", filters_json="{}")
+            s.add(j)
+            await s.flush()
+            from tests.unit.test_bot_units import _make_image
+            store = env.tmp_path / "storage"
+            a = _make_image(store, j.id, file_path="images/a.png")
+            b = _make_image(store, j.id, file_path="images/b.png")
+            s.add_all([a, b])
+            await s.commit()
+            first_id = a.id
+
+        # pool summary has the viewer button; viewer navigates one by one
+        await env.app.handle_message(env.msg("/pool", update_id=1))
+        buttons = env.gw.messages[-1][2]
+        assert any("view:pool" in c for row in buttons for _l, c in row)
+        await env.app.handle_callback(env.cb(f"view:pool:{first_id}", update_id=2))
+        photo = env.gw.photos[-1]
+        navs = [c for row in (photo[4] or []) for _l, c in row]
+        assert any(c.startswith("view:pool:") and c != f"view:pool:{first_id}"
+                   for c in navs)  # a Next button exists
+        assert any(c.startswith("nsfw:") for c in navs)
+
+        # queue: a pending job is cancelable; menu shows pause only when busy
+        async with env.factory() as s:
+            s.add(Job(status="pending", idempotency_key="q1", prompt_snapshot="p",
+                      template_version="t", filters_json="{}"))
+            await s.commit()
+        await env.app.handle_message(env.msg("/queue", update_id=3))
+        q_buttons = env.gw.messages[-1][2]
+        assert any(c.startswith("cancel:") for row in q_buttons for _l, c in row)
+        env.gw.messages.clear()
+        await env.app.handle_message(env.msg("/menu", update_id=4))
+        labels = [c for row in env.gw.messages[-1][2] for _l, c in row]
+        assert "menu:pause" in labels and "menu:resume" not in labels
+        await env.app.handle_message(env.msg("/pause", update_id=5))
+        env.gw.messages.clear()
+        await env.app.handle_message(env.msg("/menu", update_id=6))
+        labels = [c for row in env.gw.messages[-1][2] for _l, c in row]
+        assert "menu:resume" in labels and "menu:pause" not in labels
+
+        # character -> use character starts the wizard at the count step
+        async with env.factory() as s:
+            from waifubot.db.models import Character
+            s.add(Character(name="Aya", identity_prompt="black hair, green eyes",
+                            version=1, is_active=True))
+            await s.commit()
+        await env.app.handle_callback(env.cb("menu:characters", update_id=7))
+        await env.app.handle_callback(env.cb("char:1", update_id=8))
+        await env.app.handle_callback(env.cb("usechar:1", update_id=9))
+        d = await env.memory.get(ADMIN_ID)
+        assert d["step"] == "count" and d["character_id"] == 1
+
+    _run(body())
+
+
+def test_review_round4_regressions(env: Env) -> None:
+    """Bugs found in the 2026-10-16 review pass must never come back."""
+
+    async def body() -> None:
+        from tests.unit.test_bot_units import _make_image
+
+        # 1) a group where one file is missing falls back to a SINGLE photo
+        #    (Telegram albums need 2+ items) - still with that photo's spoiler
+        async with env.factory() as s:
+            j = Job(status="succeeded", idempotency_key="r4", prompt_snapshot="p",
+                    template_version="t", filters_json="{}")
+            s.add(j)
+            await s.flush()
+            store = env.tmp_path / "storage"
+            a = _make_image(store, j.id, file_path="images/a.png")
+            b = _make_image(store, j.id, file_path="images/b.png")
+            s.add_all([a, b])
+            await s.commit()
+            a_id, b_id = a.id, b.id
+        (env.tmp_path / "storage" / "images" / "b.png").unlink()  # lost file
+        await env.app.handle_callback(env.cb(f"nsfw:{a_id}", update_id=1))
+        await env.app.handle_callback(env.cb("grp", update_id=2))
+        await env.app.handle_callback(env.cb(f"gtog:{a_id}", update_id=3))
+        await env.app.handle_callback(env.cb(f"gtog:{b_id}", update_id=4))
+        await env.app.handle_callback(env.cb("gnext", update_id=5))
+        await env.app.handle_callback(env.cb("gskip", update_id=6))
+        await env.app.handle_callback(env.cb("gok", update_id=7))
+        assert env.gw.media_groups == []          # no 1-item album was attempted
+        assert len(env.gw.photos) == 1            # one single photo instead
+        assert env.gw.photos[0][3] is True        # with the NSFW spoiler
+
+        # 2) starting from a character uses default_style - never surprise-random
+        async with env.factory() as s:
+            from waifubot.db.models import Character
+            s.add(Character(name="Aya", identity_prompt="black hair, green eyes",
+                            version=1, is_active=True))
+            await s.commit()
+        await env.app.handle_callback(env.cb("usechar:1", update_id=10))
+        await env.app.handle_callback(env.cb("wiz:n:2", update_id=11))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=12))
+        async with env.factory() as s:
+            job = (await s.execute(select(Job).where(Job.idempotency_key == "tg:12"))
+                   ).scalars().one()
+            import json as _json
+            filters = _json.loads(job.filters_json)
+        assert filters["style_value"] == "ref:optionKeyName:Anime"  # default_style
 
     _run(body())

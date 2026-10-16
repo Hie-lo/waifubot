@@ -8,7 +8,8 @@
 # assembler always prefixes `prefix` and an adult age.
 version: "1"
 template_version: "identity-v1"
-prefix: "adult woman"
+# No forced adult/gender framing (user 2026-10-16: the site has no such limit).
+prefix: ""
 # Anchors appended to the face traits of a *precise* (savec) identity — they
 # tell the model to keep facial details consistent. Never added to a user's
 # free-hand identity (exact identity preservation).

@@ -18,12 +18,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 POOL = load_identity_pool(REPO_ROOT / "config" / "identity_pool.yaml")
 
 
-def test_random_identity_is_diverse_and_adult() -> None:
+def test_random_identity_is_diverse() -> None:
     ids = {random_identity(POOL, random.Random(i)) for i in range(12)}
     assert len(ids) >= 10  # 12 draws must not collapse to one "blue hair" look
     for identity in ids:
-        assert identity.startswith("adult woman")
-        assert "years old" in identity
+        assert "hair" in identity and "eyes" in identity
 
 
 def test_assemble_identity_canonical_order_and_face_anchors() -> None:
@@ -37,7 +36,7 @@ def test_assemble_identity_canonical_order_and_face_anchors() -> None:
     }
     out = assemble_identity(POOL, traits, extras="red dress", precise=True)
     assert out == (
-        "adult woman, 25 years old, black ponytail hair, green eyes, "
+        "25 years old, black ponytail hair, green eyes, "
         "fair skin, oval face, red dress, detailed face, consistent facial features"
     )
     # free-hand identities never gain invented anchors (exact preservation)
@@ -46,7 +45,7 @@ def test_assemble_identity_canonical_order_and_face_anchors() -> None:
 
 def test_extract_traits_reads_only_exact_pool_values() -> None:
     found = extract_traits(
-        POOL, "adult woman, 28 years old, long wavy blonde hair, hazel eyes, tan skin"
+        POOL, "28 years old, long wavy blonde hair, hazel eyes, tan skin"
     )
     assert found["age"] == "28"
     assert found["hair_style"] == "long wavy"

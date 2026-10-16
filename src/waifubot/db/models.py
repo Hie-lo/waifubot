@@ -121,6 +121,9 @@ class Image(Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending_review")
     seed: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # User request 2026-10-16: admin marks images NSFW; such posts go out with a
+    # spoiler cover (per-image, including inside media groups).
+    is_nsfw: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -9,7 +9,8 @@ Two jobs:
    same character keeps its face and details across later generations.
 
 Rules that never change (SPEC §2.3 / AGENT.md):
-- Every assembled identity is adult-only: `prefix` + an adult age, always first.
+- No forced adult framing (user 2026-10-16); the minor blocklist still applies
+  at validation time (standing user rule: minor protection is mandatory).
 - `extract_traits` only READS text; assembling a precise identity is an explicit
   user action in the savec wizard (never silently rewritten).
 """
@@ -52,7 +53,7 @@ class TraitValue:
 
 class IdentityPool:
     def __init__(self, data: dict[str, Any]) -> None:
-        self.prefix: str = str(data.get("prefix") or "adult woman")
+        self.prefix: str = str(data.get("prefix") or "")
         self.face_anchors: str = str(data.get("face_anchors") or "")
         self.traits: dict[str, list[TraitValue]] = {}
         for trait, key in _TRAIT_KEYS.items():
@@ -101,9 +102,10 @@ def assemble_identity(
 ) -> str:
     """Build the identity prompt in canonical order. `traits` maps trait name ->
     chosen value (already final English prompt fragments)."""
-    parts: list[str] = [pool.prefix]
+    parts: list[str] = [pool.prefix] if pool.prefix else []
     age = traits.get("age", "")
-    parts.append(f"{age} years old" if age.isdigit() else age or "25 years old")
+    if age:
+        parts.append(f"{age} years old" if age.isdigit() else age)
     hair_color = traits.get("hair_color", "")
     hair_style = traits.get("hair_style", "")
     if hair_color or hair_style:

@@ -35,9 +35,11 @@ def test_adult_identity_accepted() -> None:
     validate_adult_identity(ADULT, load_blocklist(BLOCKLIST_PATH))
 
 
-def test_identity_without_adult_words_rejected() -> None:
-    with pytest.raises(ValidationError, match="adult"):
-        validate_adult_identity("blue hair, red eyes", ("loli",))
+def test_identity_without_adult_words_accepted() -> None:
+    """USER RULE 2026-10-16: no 'adult' framing is required anymore; only the
+    minor-protection checks (blocked terms, stated minor age) remain."""
+    validate_adult_identity("elf girl, silver hair, green eyes", ("loli",))
+    validate_adult_identity("25 years old, black ponytail hair", ())
 
 
 def test_identity_with_minor_age_rejected() -> None:

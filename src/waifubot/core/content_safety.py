@@ -1,13 +1,13 @@
-"""Content safety checks (SPEC §8, amended by user decision 2026-10-16).
+"""Content safety checks (SPEC §8, amended by user decisions 2026-10-16).
 
-USER DECISION: ALLOW_NSFW is an admin switch — the SFW-only MVP gate is removed.
-What REMAINS mandatory (these protect against minors, not against NSFW):
-every character explicitly adult (adult age + adult features stated in the
-identity) and the minor-coded blocklist on the FINAL prompt.
+USER DECISION 1: ALLOW_NSFW is an admin switch — the SFW-only MVP gate is gone.
+USER DECISION 2 (2026-10-16, latest word wins): the "adult" framing restriction
+is REMOVED — identities no longer need to state an adult age or 'woman'; the
+site itself does not require it.
 
-Human (admin) review is the PRIMARY control. These automated checks reduce
-risk: a text rule cannot make a provider draw an adult, and keyword lists can
-be bypassed. False positives are safe — they reject a job and cost nothing.
+What REMAINS (standing user rule: minor protection is mandatory): the
+minor-coded blocklist and the stated-minor-age rejection, on identities AND on
+the final prompt. Human (admin) review stays the primary control.
 """
 from __future__ import annotations
 
@@ -23,13 +23,6 @@ from waifubot.errors import ConfigError, ValidationError
 MINOR_AGE_RE = re.compile(
     r"\b(?:[1-9]|1[0-7])\s*[- ]?\s*(?:years?[\s-]*old|yo)\b", re.IGNORECASE
 )
-# Identity must state an adult age (18+) or the word "adult"...
-ADULT_AGE_RE = re.compile(
-    r"\b(?:1[89]|[2-9]\d)\s*[- ]?\s*(?:years?[\s-]*old|yo)\b|\badult\b", re.IGNORECASE
-)
-# ...and adult features.
-ADULT_FEATURE_RE = re.compile(r"\b(?:woman|adult|mature)\b", re.IGNORECASE)
-
 
 def load_blocklist(path: Path) -> tuple[str, ...]:
     try:
@@ -47,7 +40,8 @@ def load_blocklist(path: Path) -> tuple[str, ...]:
 
 
 def validate_adult_identity(identity: str, blocklist: tuple[str, ...]) -> None:
-    """A character's identity must state adult age and adult features (SPEC §8)."""
+    """Minor protection only (standing user rule): reject minor-coded terms and
+    stated minor ages. No 'adult' framing is required (user 2026-10-16)."""
     text = identity.strip()
     if not text:
         raise ValidationError("identity_prompt must not be empty")
@@ -57,10 +51,6 @@ def validate_adult_identity(identity: str, blocklist: tuple[str, ...]) -> None:
             raise ValidationError(f"identity_prompt contains blocked term: {term!r}")
     if MINOR_AGE_RE.search(text):
         raise ValidationError("identity_prompt states a minor age")
-    if not ADULT_AGE_RE.search(text):
-        raise ValidationError("identity_prompt must state an adult age (18+) or 'adult'")
-    if not ADULT_FEATURE_RE.search(text):
-        raise ValidationError("identity_prompt must state adult features (e.g. 'woman')")
 
 
 def check_blocklist(prompt: str, blocklist: tuple[str, ...]) -> None:
