@@ -19,5 +19,6 @@ generate_button: "button#generateButtonEl"
 output_iframe: "#outputIframeEl"
 
 # Optional
-style_value: ""         # e.g. "Soft Anime" if verified
-prompt: "a friendly anime girl, soft lighting, high quality"
+style_value: "ref:optionKeyName:Soft Anime"
+prompt: "masterpiece, anime girl, blue hair, smiling, high quality"
+user_data_dir: "./user_data"   # persistent browser profile; "" = fresh profile each run

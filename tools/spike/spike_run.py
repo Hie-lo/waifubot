@@ -81,6 +81,7 @@ class SpikeConfig:
     output_iframe: str = "#outputIframeEl"
     style_value: str = ""
     prompt: str = "a friendly anime girl, soft lighting"
+    user_data_dir: str = ""  # persistent browser profile; "" = fresh profile each run
 
 
 @dataclass
@@ -170,24 +171,29 @@ def atomic_save(raw: bytes, out_dir: Path, fmt: str) -> str:
 
 
 async def collect_candidates(page, cfg: SpikeConfig) -> list[str]:
-    """Collect direct data: URLs from relevant img elements only."""
+    """Collect direct data: image URLs by scanning ALL frames (PoC §8.1).
+
+    Only img.src values that start with ``data:image/`` and are longer than
+    5000 chars. No canvas conversion (§8.2).
+    """
     urls: list[str] = []
-    try:
-        frame = page.frame_locator(cfg.output_iframe)
-        imgs = frame.locator("img")
-        count = await imgs.count()
-        for i in range(count):
-            src = await imgs.nth(i).get_attribute("src")
-            if src and src.startswith("data:image/"):
-                urls.append(src)
-    except Exception:  # noqa: BLE001
-        # Fall back to main page
-        imgs = page.locator("img")
-        count = await imgs.count()
-        for i in range(count):
-            src = await imgs.nth(i).get_attribute("src")
-            if src and src.startswith("data:image/"):
-                urls.append(src)
+    for frame in page.frames:
+        try:
+            found = await frame.evaluate(
+                """() => {
+                    const out = [];
+                    for (const img of document.querySelectorAll('img')) {
+                        const src = img.src || img.getAttribute('src') || '';
+                        if (src.startsWith('data:image/') && src.length > 5000) {
+                            out.push(src);
+                        }
+                    }
+                    return out;
+                }"""
+            )
+        except Exception:  # noqa: BLE001 — frame may be detached or cross-origin
+            continue
+        urls.extend(found)
     # De-dup preserving order
     seen: set[str] = set()
     out: list[str] = []
@@ -205,12 +211,20 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
     out_dir = Path(cfg.output_dir) / run_id
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=cfg.headless)
-        context = await browser.new_context()
-        page = await context.new_page()
+        browser = None
+        if cfg.user_data_dir:
+            # Persistent profile (PoC-style). Plain automation — no stealth args.
+            context = await pw.chromium.launch_persistent_context(
+                cfg.user_data_dir, headless=cfg.headless
+            )
+            page = context.pages[0] if context.pages else await context.new_page()
+        else:
+            browser = await pw.chromium.launch(headless=cfg.headless)
+            context = await browser.new_context()
+            page = await context.new_page()
         try:
-            await page.goto(cfg.page_url, timeout=60000)
-            await page.wait_for_load_state("domcontentloaded", timeout=60000)
+            await page.goto(cfg.page_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(5000)  # let the output iframe settle (PoC)
 
             # Blocked check (initial)
             body_text = await page.inner_text("body")
@@ -221,16 +235,26 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
                 metrics.errors.append(f"blocked_on_load:{reason}")
                 return _finish(metrics, t0)
 
-            # Fill prompt
-            await page.locator(cfg.prompt_textarea).fill(cfg.prompt, timeout=30000)
+            # Interactions live inside the output iframe (PoC §8.1)
+            frame = page.frame_locator(cfg.output_iframe)
+            prompt_box = frame.locator(cfg.prompt_textarea)
+            await prompt_box.wait_for(state="visible", timeout=30000)
+            await prompt_box.click()
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await prompt_box.fill(cfg.prompt)
+            print("prompt filled")
+
             if cfg.style_value and cfg.style_select:
                 try:
-                    await page.locator(cfg.style_select).select_option(cfg.style_value, timeout=10000)
+                    await frame.locator(cfg.style_select).select_option(
+                        value=cfg.style_value, timeout=10000
+                    )
                 except Exception as e:  # noqa: BLE001
                     metrics.errors.append(f"style_select_failed:{type(e).__name__}")
 
-            # Click generate
-            await page.locator(cfg.generate_button).click(timeout=30000)
+            await frame.locator(cfg.generate_button).click(force=True, timeout=30000)
+            print("generate clicked")
 
             # Poll
             deadline = time.monotonic() + cfg.timeout_s
@@ -280,10 +304,12 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
                 await context.close()
             except Exception:  # noqa: BLE001
                 pass
-            try:
-                await browser.close()
-            except Exception:  # noqa: BLE001
-                pass
+            # With a persistent context, context.close() is enough (§9.4).
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     return _finish(metrics, t0)
 
