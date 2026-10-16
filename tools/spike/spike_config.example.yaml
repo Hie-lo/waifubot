@@ -19,7 +19,11 @@ generate_button: "button#generateButtonEl"
 output_iframe: "#outputIframeEl"
 
 # Optional
-style_value: "ref:optionKeyName:Soft Anime"
+# Style: user decision 2026-10-16 — "Anime" instead of "Soft Anime" so the intended
+# design comes out of the prompts. Leave "" ("no style") to not touch the select and
+# specify the style inside the prompt instead. If selection fails, the run prints the
+# page's real option values — use one of those (never guess).
+style_value: "ref:optionKeyName:Anime"
 prompt: "masterpiece, anime girl, blue hair, smiling, high quality"
 user_data_dir: "./user_data"   # persistent browser profile; "" = fresh profile each run
 

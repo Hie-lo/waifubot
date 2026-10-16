@@ -320,10 +320,20 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
             await asyncio.sleep(random.uniform(0.3, 0.8))  # brief natural pause
 
             if cfg.style_value and cfg.style_select:
+                # Print the page's real option values (ground truth; no invention).
+                try:
+                    options = await frame.locator(cfg.style_select).evaluate(
+                        "(el) => Array.from(el.options)"
+                        ".map(o => ({value: o.value, label: (o.textContent || '').trim()}))"
+                    )
+                    print(f"style options: {options}")
+                except Exception as e:  # noqa: BLE001
+                    metrics.errors.append(f"style_options_failed:{type(e).__name__}")
                 try:
                     await frame.locator(cfg.style_select).select_option(
                         value=cfg.style_value, timeout=10000
                     )
+                    print("style selected")
                 except Exception as e:  # noqa: BLE001
                     metrics.errors.append(f"style_select_failed:{type(e).__name__}")
 

@@ -6,8 +6,9 @@ See `SPEC.md` (v3.1) for the full specification and `AGENT.md` for working rules
 
 ## Status
 
-- Sprint 0 (provider feasibility spike): in progress — plain fill and human-typing-only runs were blocked at the generate step; the user's working PoC automation profile (`slow_mo`, human pacing, user-approved Chromium arg, canvas fallback) is now adopted in the spike; re-run pending on the user's WSL2 machine.
-- No application code yet.
+- Sprint 0 (provider feasibility spike): **done — GO (2026-10-16).** Live generation on the user's WSL2 machine succeeded with the user-approved automation profile (recorded in `docs/spike-report.md` and `docs/provider-permission.md`). Style default: site "Anime" (user decision; "no style" also supported via config).
+- Sprint 1a (foundation): in progress.
+- No application code yet beyond the throwaway spike tools.
 
 ## Setup (target: WSL2, Python 3.11)
 
