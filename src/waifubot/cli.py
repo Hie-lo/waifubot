@@ -127,6 +127,8 @@ async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
                 seed=args.seed,
                 idempotency_key=args.idempotency_key,
                 requested_by="cli",
+                max_images_per_job=settings.max_images_per_job,
+                max_jobs_per_day=settings.max_jobs_per_day,
             )
             await session.commit()
 
@@ -213,6 +215,8 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
                     timeout_s=float(provider_cfg.get("limits", {}).get("timeout_s", 240)),
                     idempotency_key=f"live:{uuid.uuid4().hex}",
                     requested_by="cli-live",
+                    max_images_per_job=settings.max_images_per_job,
+                    max_jobs_per_day=settings.max_jobs_per_day,
                 )
                 await session.commit()
                 print(f"[live] job={job.id} status={job.status} images={len(images)} "

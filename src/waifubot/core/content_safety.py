@@ -19,10 +19,13 @@ import yaml
 from waifubot.errors import ConfigError, ValidationError
 
 # A stated age below 18 anywhere in the prompt is always rejected.
-MINOR_AGE_RE = re.compile(r"\b(?:[1-9]|1[0-7])\s*[- ]?\s*(?:years?\s*old|yo)\b", re.IGNORECASE)
+# (Review 2026-10-16: the hyphen form "17-year-old" previously slipped through.)
+MINOR_AGE_RE = re.compile(
+    r"\b(?:[1-9]|1[0-7])\s*[- ]?\s*(?:years?[\s-]*old|yo)\b", re.IGNORECASE
+)
 # Identity must state an adult age (18+) or the word "adult"...
 ADULT_AGE_RE = re.compile(
-    r"\b(?:1[89]|[2-9]\d)\s*[- ]?\s*(?:years?\s*old|yo)\b|\badult\b", re.IGNORECASE
+    r"\b(?:1[89]|[2-9]\d)\s*[- ]?\s*(?:years?[\s-]*old|yo)\b|\badult\b", re.IGNORECASE
 )
 # ...and adult features.
 ADULT_FEATURE_RE = re.compile(r"\b(?:woman|adult|mature)\b", re.IGNORECASE)

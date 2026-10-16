@@ -144,3 +144,100 @@ def test_image_rows_carry_validation_metadata(env) -> None:  # noqa: ANN001
         assert img.mime_type == "image/png"
         assert img.seed and img.seed.startswith("mock-")
         assert img.file_path.startswith("images/")
+
+
+def test_hard_limits_are_enforced(env) -> None:  # noqa: ANN001
+    # Review 2026-10-16: these caps were enforced NOWHERE before (latent bug).
+    from waifubot.errors import ValidationError
+
+    factory, builder, pipeline = env
+
+    async def body() -> None:
+        async with factory() as session:
+            with pytest.raises(ValidationError, match="count"):
+                await run_generation_job(
+                    session,
+                    provider=MockProvider({"mode": "ok"}),
+                    pipeline=pipeline,
+                    builder=builder,
+                    identity=IDENTITY,
+                    style_lock=None,
+                    count=21,
+                    seed=42,
+                )
+        async with factory() as session:
+            with pytest.raises(ValidationError, match="daily job cap"):
+                await run_generation_job(
+                    session,
+                    provider=MockProvider({"mode": "ok"}),
+                    pipeline=pipeline,
+                    builder=builder,
+                    identity=IDENTITY,
+                    style_lock=None,
+                    count=2,
+                    seed=42,
+                    max_jobs_per_day=0,
+                )
+
+    _run(body())
+
+
+def test_same_bytes_stored_once_across_jobs(env) -> None:  # noqa: ANN001
+    # Review 2026-10-16: cross-job SHA-256 dedupe (SPEC §3.3) was missing.
+    from io import BytesIO
+
+    from PIL import Image as PILImage
+
+    from waifubot.core.image_provider import (
+        STATUS_OK,
+        GenerationRequest,
+        GenerationResult,
+        ImageCandidate,
+    )
+
+    buf = BytesIO()
+    PILImage.new("RGB", (300, 300), (10, 20, 30)).save(buf, format="PNG")
+    fixed = buf.getvalue()
+
+    class FixedProvider:
+        name = "fixed"
+
+        async def health_check(self) -> bool:
+            return True
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            return GenerationResult(
+                status=STATUS_OK,
+                candidates=[ImageCandidate(data=fixed, claimed_mime="image/png")],
+                elapsed_s=0.0,
+                provider=self.name,
+            )
+
+        async def close(self) -> None:
+            return None
+
+    factory, builder, pipeline = env
+
+    async def body():  # noqa: ANN202
+        out = []
+        for _ in range(2):
+            async with factory() as session:
+                job, images, _ = await run_generation_job(
+                    session,
+                    provider=FixedProvider(),
+                    pipeline=pipeline,
+                    builder=builder,
+                    identity=IDENTITY,
+                    style_lock=None,
+                    count=1,
+                    seed=42,
+                )
+                await session.commit()
+                out.append((job, images))
+        return out
+
+    (job1, imgs1), (job2, imgs2) = _run(body())
+    assert job1.status == "succeeded" and len(imgs1) == 1
+    assert len(imgs2) == 0
+    assert job2.status == "failed"
+    assert job2.error_summary and "duplicate" in job2.error_summary

@@ -120,21 +120,36 @@ def decode_data_url(data_url: str) -> tuple[str, bytes] | None:
 def clamp_limits(limits: Mapping[str, Any]) -> dict[str, float]:
     timeout_s = float(limits.get("timeout_s", 240))
     poll_s = float(limits.get("poll_interval_s", 3.0))
+    challenge_wait = float(limits.get("challenge_wait_s", 180))
     return {
         "timeout_s": min(max(10.0, timeout_s), HARD_MAX_TIMEOUT_S),
         "poll_interval_s": min(max(1.0, poll_s), HARD_MAX_POLL_INTERVAL_S),
         "min_data_url_chars": float(limits.get("min_data_url_chars", 5000)),
         "include_canvas_fallback": bool(limits.get("include_canvas_fallback", True)),
+        # Wait for a HUMAN to approve a challenge page (we never solve it):
+        # 0 = disabled (blocked_by_provider immediately).
+        "challenge_wait_s": min(max(0.0, challenge_wait), 600.0),
     }
 
 
-def clamp_pacing(launch: Mapping[str, Any]) -> tuple[int, int]:
+def clamp_pacing(launch: Mapping[str, Any]) -> dict[str, Any]:
     pacing = launch.get("human_pacing", {}) or {}
-    lo = int(pacing.get("type_delay_ms_min", 40))
-    hi = int(pacing.get("type_delay_ms_max", 120))
-    lo = min(max(10, lo), 300)
+    lo = int(pacing.get("type_delay_ms_min", 15))
+    hi = int(pacing.get("type_delay_ms_max", 45))
+    lo = min(max(5, lo), 300)
     hi = min(max(lo, hi), HARD_MAX_TYPE_DELAY_MS)
-    return lo, hi
+    pause_chance = float(pacing.get("pause_chance", 0.05))
+    pause_lo = int(pacing.get("pause_ms_min", 120))
+    pause_hi = int(pacing.get("pause_ms_max", 350))
+    pause_lo = min(max(50, pause_lo), 2000)
+    pause_hi = min(max(pause_lo, pause_hi), 2000)
+    return {
+        "type_delay_ms_min": lo,
+        "type_delay_ms_max": hi,
+        "pause_chance": min(max(0.0, pause_chance), 0.5),
+        "pause_ms_min": pause_lo,
+        "pause_ms_max": pause_hi,
+    }
 
 
 class PerchanceProvider:
@@ -200,13 +215,34 @@ class PerchanceProvider:
         return detect_block(text, page.url)
 
     async def _human_type(self, locator: Any, text: str) -> None:  # noqa: ANN201
-        lo, hi = self._pacing
+        p = self._pacing
         for ch in text:
             await locator.type(ch)
-            delay = random.uniform(lo, hi) / 1000.0
-            if random.random() < 0.10:
-                delay += random.uniform(0.25, 0.6)  # occasional short pause
+            delay = random.uniform(p["type_delay_ms_min"], p["type_delay_ms_max"]) / 1000.0
+            if random.random() < p["pause_chance"]:
+                delay += random.uniform(p["pause_ms_min"], p["pause_ms_max"]) / 1000.0
             await asyncio.sleep(delay)
+
+    async def _wait_for_operator_challenge(self, page: Any, notes: list[str], where: str) -> bool:
+        """A challenge/block page appeared. WAIT for a HUMAN to approve it in the
+        visible browser window — we never solve or bypass it (AGENT.md prohibition).
+        Returns True if the page cleared (operator approved), False on timeout."""
+        budget = self._limits["challenge_wait_s"]
+        if budget <= 0:
+            return False
+        print(
+            f"[provider] challenge/block page detected ({where}) — waiting up to "
+            f"{budget:.0f}s for a HUMAN to approve it in the browser window "
+            "(never solved automatically)"
+        )
+        deadline = time.monotonic() + budget
+        while time.monotonic() < deadline:
+            await asyncio.sleep(5)
+            if not await self._blocked_reason(page):
+                notes.append("challenge_approved_by_operator")
+                print("[provider] challenge cleared by operator — continuing")
+                return True
+        return False
 
     async def _collect(self, page: Any) -> list[str]:  # noqa: ANN201
         js = _JS_SCAN.replace(
@@ -281,7 +317,9 @@ class PerchanceProvider:
 
             reason = await self._blocked_reason(page)
             if reason:
-                return finish(STATUS_BLOCKED, [], ERROR_BLOCKED, f"blocked on load: {reason}")
+                if not await self._wait_for_operator_challenge(page, notes, "on load"):
+                    return finish(STATUS_BLOCKED, [], ERROR_BLOCKED,
+                                  f"blocked on load: {reason}")
 
             frame = page.frame_locator(self._cfg["output_iframe"])
             selectors = self._cfg["selectors"]
@@ -325,8 +363,9 @@ class PerchanceProvider:
                 await asyncio.sleep(self._limits["poll_interval_s"])
                 reason = await self._blocked_reason(page)
                 if reason:
-                    return finish(STATUS_BLOCKED, list(collected.values()), ERROR_BLOCKED,
-                                  f"blocked during poll: {reason}")
+                    if not await self._wait_for_operator_challenge(page, notes, "during poll"):
+                        return finish(STATUS_BLOCKED, list(collected.values()), ERROR_BLOCKED,
+                                      f"blocked during poll: {reason}")
                 for url in await self._collect(page):
                     if url in collected:
                         continue

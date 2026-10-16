@@ -67,3 +67,13 @@ def test_final_prompt_minor_age_rejected() -> None:
 
 def test_clean_prompt_passes() -> None:
     check_blocklist("adult woman, 25 years old, standing, smiling", ("loli", "child"))
+
+
+def test_minor_age_hyphen_form_rejected() -> None:
+    # Review 2026-10-16: "17-year-old" used to slip past the regex.
+    with pytest.raises(ValidationError, match="minor"):
+        validate_adult_identity("adult woman, 17-year-old, blue hair", ())
+
+
+def test_adult_age_hyphen_form_accepted() -> None:
+    validate_adult_identity("adult woman, 25-year-old, blue hair", ())

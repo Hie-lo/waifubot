@@ -75,8 +75,12 @@ class SpikeConfig:
     prompt: str = "a friendly anime girl, soft lighting"
     user_data_dir: str = ""  # persistent browser profile; "" = fresh profile each run
     # Human-paced typing (user-approved 2026-10-16 after a plain fill() run got blocked)
-    type_delay_ms_min: int = 40
-    type_delay_ms_max: int = 120
+    type_delay_ms_min: int = 15
+    type_delay_ms_max: int = 45
+    pause_chance: float = 0.05
+    pause_ms_min: int = 120
+    pause_ms_max: int = 350
+    challenge_wait_s: int = 180
     # Browser automation profile — user decision 2026-10-16: match the user's working PoC
     slow_mo_ms: int = 100
     launch_args: list[str] = field(default_factory=list)
@@ -137,6 +141,9 @@ def provider_config(cfg: SpikeConfig) -> dict[str, Any]:
             "human_pacing": {
                 "type_delay_ms_min": cfg.type_delay_ms_min,
                 "type_delay_ms_max": cfg.type_delay_ms_max,
+                "pause_chance": float(getattr(cfg, "pause_chance", 0.05)),
+                "pause_ms_min": int(getattr(cfg, "pause_ms_min", 120)),
+                "pause_ms_max": int(getattr(cfg, "pause_ms_max", 350)),
             },
         },
         "limits": {
@@ -144,6 +151,7 @@ def provider_config(cfg: SpikeConfig) -> dict[str, Any]:
             "poll_interval_s": cfg.poll_interval_s,
             "min_data_url_chars": 5000,
             "include_canvas_fallback": cfg.include_canvas_fallback,
+            "challenge_wait_s": cfg.challenge_wait_s,
         },
     }
 

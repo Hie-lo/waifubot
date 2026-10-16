@@ -53,6 +53,18 @@ Living document — updated every sprint.
   (4) the CLI auto-applies migrations (fixes `no such table: settings`).
   Conflicts reported to the user; remaining hard lines (minor protections, no CAPTCHA
   solving / proxies / auto-retries on blocks) were listed for the user to override if desired.
+- **First real live test SUCCEEDED (2026-10-16, user's WSL2):** `live-smoke --confirm-live
+  --runs 3` → 3/3 jobs succeeded (4+2+2 images, 96–122 s each). User decisions after the test:
+  faster typing (15–45 ms/char) and wait-for-human on challenge pages (default 180 s).
+- **Professional review (2026-10-16, user request):** full audit of Sprints 0–2 found and fixed:
+  (1) hard limits (20 images/job, 100 jobs/day) were enforced NOWHERE — `check_generation_limits`
+  added to the generation service + wired through the CLI; (2) cross-job SHA-256 dedupe missing
+  (SPEC §3.3) — pipeline now seeds `seen_sha256` from existing rows; (3) prompts over 2048 chars
+  raised and failed the job — now a deterministic cap that never drops identity/style; (4) minor-age
+  regex missed hyphen forms ("17-year-old") — regex fixed; (5) `AdminSettings.get` crashed on a
+  stale/invalid stored value — now falls back to the default. Verified model↔migration consistency,
+  FK pragma, session handling, mock bounds, atomic saves. Landmines documented: self-referential
+  `Character.parent/children` needs `awaitable_attrs`; daily-cap day boundary is UTC.
 
 ## Confirmed for Sprint 3 (Telegram admin bot)
 - `/settings` must expose ALL admin-tunable values including art style (`default_style` key →

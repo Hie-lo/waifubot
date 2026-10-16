@@ -92,3 +92,18 @@ def test_art_style_is_changeable(settings: AdminSettings) -> None:
         assert "default_style" in SPECS_BY_KEY
 
     _run(body())
+
+
+def test_get_falls_back_to_default_on_invalid_stored_value(settings: AdminSettings) -> None:
+    # Review 2026-10-16: a stale/corrupt row must never break the bot.
+    async def body() -> None:
+        async with settings._sessions() as s:  # noqa: SLF001
+            s.add(models.Setting(key="images_per_job", value_json='"not-an-int"'))
+            await s.commit()
+        assert await settings.get("images_per_job") == 4
+        async with settings._sessions() as s:  # noqa: SLF001
+            s.add(models.Setting(key="daily_cap", value_json="{broken json"))
+            await s.commit()
+        assert await settings.get("daily_cap") == 20
+
+    _run(body())

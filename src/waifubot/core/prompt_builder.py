@@ -92,9 +92,14 @@ class PromptBuilder:
         prompt = ", ".join(p for p in parts if p)
 
         if len(prompt) > MAX_PROMPT_CHARS:
-            raise ValidationError(
-                f"prompt is {len(prompt)} chars, exceeding the {MAX_PROMPT_CHARS} cap"
-            )
+            # Deterministic cap (SPEC §6): drop the lowest-priority tail parts
+            # (quality, then admin, then scene) — identity and style lock always
+            # survive; never fail a job over a long-but-allowed identity.
+            while len(parts) > 2 and len(prompt) > MAX_PROMPT_CHARS:
+                parts.pop()
+                prompt = ", ".join(p for p in parts if p)
+            if len(prompt) > MAX_PROMPT_CHARS:
+                prompt = prompt[:MAX_PROMPT_CHARS]
         check_blocklist(prompt, self._blocklist)
 
         return PromptResult(

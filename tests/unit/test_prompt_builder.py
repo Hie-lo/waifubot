@@ -63,8 +63,19 @@ def test_admin_text_is_appended_before_quality(builder: PromptBuilder) -> None:
 
 
 def test_prompt_cap_enforced(builder: PromptBuilder) -> None:
-    with pytest.raises(ValidationError, match="2048"):
-        builder.build(identity=IDENTITY, seed=7, admin_text="x" * MAX_PROMPT_CHARS)
+    # Review 2026-10-16: the cap is deterministic — never fail the job; drop the
+    # lowest-priority tail parts (quality/admin/scene) and keep identity+style.
+    result = builder.build(identity=IDENTITY, seed=7, admin_text="x" * MAX_PROMPT_CHARS)
+    assert len(result.prompt) <= MAX_PROMPT_CHARS
+    assert result.prompt.startswith(IDENTITY)
+    assert "xxx" not in result.prompt  # oversized admin text dropped, job still built
+
+
+def test_long_identity_survives_the_cap(builder: PromptBuilder) -> None:
+    long_identity = "adult woman, 25 years old, " + "x" * 2010  # > 2048 with style
+    result = builder.build(identity=long_identity, seed=7)
+    assert len(result.prompt) == MAX_PROMPT_CHARS  # hard-truncated at the cap
+    assert result.prompt.startswith("adult woman, 25 years old, xxx")  # identity kept
 
 
 def test_blocklist_runs_on_final_prompt(builder: PromptBuilder) -> None:

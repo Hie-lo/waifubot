@@ -95,12 +95,22 @@ class AdminSettings:
         spec = SPECS_BY_KEY.get(key)
         if spec is None:
             raise ConfigError(f"unknown setting {key!r}")
-        if session is not None:
-            row = await session.get(Setting, key)
-            return self.validate(key, json.loads(row.value_json)) if row else spec.default
-        async with self._sessions() as s:
+
+        async def _read(s: AsyncSession) -> Any:
             row = await s.get(Setting, key)
-            return self.validate(key, json.loads(row.value_json)) if row else spec.default
+            if row is None:
+                return spec.default
+            # Resilient read (review 2026-10-16): a stale/invalid stored value
+            # must never break the bot — fall back to the default.
+            try:
+                return self.validate(key, json.loads(row.value_json))
+            except (ConfigError, TypeError, ValueError):
+                return spec.default
+
+        if session is not None:
+            return await _read(session)
+        async with self._sessions() as s:
+            return await _read(s)
 
     async def set(self, key: str, value: Any, updated_by: str = "admin") -> Any:
         value = self.validate(key, value)

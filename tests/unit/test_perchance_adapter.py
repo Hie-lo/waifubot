@@ -47,15 +47,20 @@ def test_decode_data_url_rejects_malformed() -> None:
 
 
 def test_limits_are_clamped_to_hard_caps() -> None:
-    out = clamp_limits({"timeout_s": 99999, "poll_interval_s": 0.1})
+    out = clamp_limits({"timeout_s": 99999, "poll_interval_s": 0.1, "challenge_wait_s": 99999})
     assert out["timeout_s"] <= 300
     assert out["poll_interval_s"] >= 1.0
+    assert out["challenge_wait_s"] <= 600
 
 
 def test_pacing_is_clamped() -> None:
-    lo, hi = clamp_pacing({"human_pacing": {"type_delay_ms_min": 1, "type_delay_ms_max": 99999}})
-    assert lo >= 10
-    assert hi <= 500 and hi >= lo
+    out = clamp_pacing({"human_pacing": {"type_delay_ms_min": 1, "type_delay_ms_max": 99999,
+                                         "pause_chance": 0.9}})
+    assert out["type_delay_ms_min"] >= 5
+    assert out["type_delay_ms_max"] <= 500 and out["type_delay_ms_max"] >= out["type_delay_ms_min"]
+    assert out["pause_chance"] <= 0.5
+    assert out["pause_ms_min"] >= 50
+    assert out["pause_ms_max"] >= out["pause_ms_min"]
 
 
 def test_factory_creates_real_adapter() -> None:
@@ -68,6 +73,7 @@ def test_factory_creates_real_adapter() -> None:
 def test_adapter_config_keeps_user_approved_profile() -> None:
     cfg = load_provider_config(REPO_ROOT / "config" / "providers" / "perchance.yaml")
     provider = PerchanceProvider(cfg)
-    lo, hi = provider._pacing  # noqa: SLF001
-    assert 10 <= lo <= hi <= 500
+    p = provider._pacing  # noqa: SLF001
+    assert 5 <= p["type_delay_ms_min"] <= p["type_delay_ms_max"] <= 500
     assert provider._limits["timeout_s"] <= 300  # noqa: SLF001
+    assert provider._limits["challenge_wait_s"] > 0  # noqa: SLF001
