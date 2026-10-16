@@ -1,0 +1,14 @@
+# Persian (fa) UI strings — Sprint 1a skeleton. Every user-visible string lives
+# here (SPEC §11). Logs stay in English.
+app_name: "WaifuBot"
+welcome: "به WaifuBot خوش آمدید!"
+help: "برای شروع از /generate استفاده کنید. راهنما: /status و /inbox و /pool."
+status: "وضعیت: {state}"
+error_generic: "خطایی رخ داد. دوباره تلاش کنید."
+not_authorized: "شما دسترسی ندارید."
+generating: "در حال تولید تصویر... لطفاً صبر کنید."
+generation_done: "تولید تمام شد. {count} تصویر آماده بررسی است."
+review_approve: "تأیید"
+review_reject: "رد"
+save_character: "ذخیره شخصیت"
+published: "در کانال منتشر شد."

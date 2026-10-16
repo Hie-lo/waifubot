@@ -28,7 +28,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -270,7 +270,7 @@ async def collect_candidates(page, cfg: SpikeConfig) -> list[str]:
 
 async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
     run_id = f"run-{run_index:02d}-{uuid.uuid4().hex[:6]}"
-    metrics = RunMetrics(run_id=run_id, started_at=datetime.now(timezone.utc).isoformat())
+    metrics = RunMetrics(run_id=run_id, started_at=datetime.now(UTC).isoformat())
     t0 = time.monotonic()
     out_dir = Path(cfg.output_dir) / run_id
 
@@ -403,7 +403,7 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
 
 def _finish(metrics: RunMetrics, t0: float) -> RunMetrics:
     metrics.elapsed_s = round(time.monotonic() - t0, 2)
-    metrics.finished_at = datetime.now(timezone.utc).isoformat()
+    metrics.finished_at = datetime.now(UTC).isoformat()
     return metrics
 
 

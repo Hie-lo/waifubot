@@ -1,0 +1,133 @@
+"""Environment configuration with code-enforced hard maximums (SPEC §4, §12).
+
+Secrets and hard limits come from environment variables. A database value can
+never override a hard limit or enable a disabled provider.
+"""
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from waifubot.errors import ConfigError
+
+# Hard maximums — enforced in code, never overridable by config or DB.
+HARD_MAX_IMAGES_PER_JOB = 20
+HARD_MAX_JOBS_PER_DAY = 100
+# MVP is SFW-only: this gate has no Telegram override (SPEC §8, AGENT.md).
+NSFW_ENABLED_IN_MVP = False
+
+_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def _parse_bool(raw: str, name: str) -> bool:
+    v = raw.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(f"{name} must be a boolean (true/false), got {raw!r}")
+
+
+def _parse_int(raw: str, name: str) -> int:
+    try:
+        return int(raw.strip())
+    except ValueError as e:
+        raise ConfigError(f"{name} must be an integer, got {raw!r}") from e
+
+
+def _parse_admin_ids(raw: str) -> tuple[int, ...]:
+    ids: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError as e:
+            raise ConfigError(
+                f"ADMIN_USER_IDS must be comma-separated integers, got {raw!r}"
+            ) from e
+    return tuple(ids)
+
+
+def _require(env: Mapping[str, str], name: str) -> str:
+    value = (env.get(name) or "").strip()
+    if not value:
+        raise ConfigError(f"{name} is required")
+    return value
+
+
+@dataclass(frozen=True)
+class Settings:
+    bot_token: str = field(repr=False, default="")
+    admin_user_ids: tuple[int, ...] = ()
+    destination_chat_id: str = ""
+    provider_enabled: bool = True
+    provider_name: str = "perchance_playwright"
+    provider_page_url: str = "https://perchance.org/ai-text-to-image-generator"
+    provider_headless: bool = False
+    allow_nsfw: bool = False
+    max_images_per_job: int = 4
+    max_jobs_per_day: int = 20
+    storage_root: Path = Path("./storage")
+    db_url: str = "sqlite+aiosqlite:///./storage/waifubot.db"
+    disk_floor_bytes: int = 2 * 1024**3
+    log_level: str = "INFO"
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
+        e: Mapping[str, str] = os.environ if env is None else env
+
+        bot_token = _require(e, "BOT_TOKEN")
+        admin_user_ids = _parse_admin_ids(_require(e, "ADMIN_USER_IDS"))
+        if not admin_user_ids:
+            raise ConfigError("ADMIN_USER_IDS must contain at least one id")
+        destination_chat_id = _require(e, "DESTINATION_CHAT_ID")
+
+        allow_nsfw = _parse_bool(e.get("ALLOW_NSFW", "false"), "ALLOW_NSFW")
+        if allow_nsfw and not NSFW_ENABLED_IN_MVP:
+            raise ConfigError("ALLOW_NSFW must be false: the MVP is SFW-only")
+
+        max_images_per_job = _parse_int(e.get("MAX_IMAGES_PER_JOB", "4"), "MAX_IMAGES_PER_JOB")
+        if not 1 <= max_images_per_job <= HARD_MAX_IMAGES_PER_JOB:
+            raise ConfigError(
+                f"MAX_IMAGES_PER_JOB must be between 1 and {HARD_MAX_IMAGES_PER_JOB}"
+            )
+        max_jobs_per_day = _parse_int(e.get("MAX_JOBS_PER_DAY", "20"), "MAX_JOBS_PER_DAY")
+        if not 1 <= max_jobs_per_day <= HARD_MAX_JOBS_PER_DAY:
+            raise ConfigError(f"MAX_JOBS_PER_DAY must be between 1 and {HARD_MAX_JOBS_PER_DAY}")
+
+        disk_floor_bytes = _parse_int(e.get("DISK_FLOOR_BYTES", "2147483648"), "DISK_FLOOR_BYTES")
+        if disk_floor_bytes < 0:
+            raise ConfigError("DISK_FLOOR_BYTES must be >= 0")
+
+        log_level = e.get("LOG_LEVEL", "INFO").strip().upper()
+        if log_level not in _LOG_LEVELS:
+            raise ConfigError(f"LOG_LEVEL must be one of {_LOG_LEVELS}, got {log_level!r}")
+
+        return cls(
+            bot_token=bot_token,
+            admin_user_ids=admin_user_ids,
+            destination_chat_id=destination_chat_id,
+            provider_enabled=_parse_bool(e.get("PROVIDER_ENABLED", "true"), "PROVIDER_ENABLED"),
+            provider_name=e.get("PROVIDER_NAME", "perchance_playwright").strip(),
+            provider_page_url=e.get(
+                "PROVIDER_PAGE_URL", "https://perchance.org/ai-text-to-image-generator"
+            ).strip(),
+            provider_headless=_parse_bool(e.get("PROVIDER_HEADLESS", "false"), "PROVIDER_HEADLESS"),
+            allow_nsfw=allow_nsfw,
+            max_images_per_job=max_images_per_job,
+            max_jobs_per_day=max_jobs_per_day,
+            storage_root=Path(e.get("STORAGE_ROOT", "./storage").strip()),
+            db_url=e.get("DB_URL", "sqlite+aiosqlite:///./storage/waifubot.db").strip(),
+            disk_floor_bytes=disk_floor_bytes,
+            log_level=log_level,
+        )
+
+
+def ensure_runtime_dirs(settings: Settings) -> None:
+    """Create runtime directories (SPEC §12). Never touches Git-tracked content."""
+    (settings.storage_root / "images").mkdir(parents=True, exist_ok=True)
+    (settings.storage_root / "temp").mkdir(parents=True, exist_ok=True)
