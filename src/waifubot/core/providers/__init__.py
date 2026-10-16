@@ -51,6 +51,7 @@ def create_provider(cfg: Mapping[str, Any]) -> ImageProvider:
     if name == MOCK_NAME:
         return MockProvider(cfg)
     if name == PERCHANCE_NAME:
-        # Real Playwright adapter arrives in Sprint 2 (config gate: disabled by default).
-        raise ProviderError("perchance_playwright adapter is not enabled before Sprint 2")
+        from waifubot.core.providers.perchance import PerchanceProvider
+
+        return PerchanceProvider(cfg)
     raise ProviderError(f"unknown provider {name!r}")

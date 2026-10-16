@@ -113,3 +113,9 @@ def test_cli_unknown_character_fails(tmp_path: Path) -> None:
     r = _cli(tmp_path, "mock-generate", "--character", "Nobody")
     assert r.returncode == 1
     assert "not found" in r.stderr
+
+
+def test_cli_live_smoke_refuses_without_confirm(tmp_path: Path) -> None:
+    r = _cli(tmp_path, "live-smoke", "--runs", "1")
+    assert r.returncode == 2
+    assert "refusing to run without --confirm-live" in r.stderr

@@ -55,6 +55,7 @@ class GenerationResult:
     provider: str
     error_code: str | None = None
     error_summary: str | None = None  # bounded, sanitized — never secrets/Base64
+    notes: tuple[str, ...] = ()  # non-fatal observations (e.g. style_select_failed)
 
 
 @runtime_checkable

@@ -11,7 +11,7 @@ from waifubot.core.providers import (
     validate_provider_config,
 )
 from waifubot.core.providers.mock import MockProvider
-from waifubot.errors import ConfigError, ProviderError
+from waifubot.errors import ConfigError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MOCK_CFG = REPO_ROOT / "config" / "providers" / "mock.yaml"
@@ -36,10 +36,12 @@ def test_perchance_config_loads_and_has_proven_selectors() -> None:
     assert "--disable-blink-features=AutomationControlled" in cfg["launch"]["args"]
 
 
-def test_perchance_adapter_gated_before_sprint2() -> None:
+def test_perchance_adapter_is_created_in_sprint2() -> None:
+    from waifubot.core.providers.perchance import PerchanceProvider
+
     cfg = load_provider_config(PERCHANCE_CFG)
-    with pytest.raises(ProviderError, match="Sprint 2"):
-        create_provider(cfg)
+    provider = create_provider(cfg)
+    assert isinstance(provider, PerchanceProvider)
 
 
 def test_unknown_provider_name_fails(tmp_path: Path) -> None:

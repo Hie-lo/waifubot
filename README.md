@@ -8,8 +8,9 @@ See `SPEC.md` (v3.1) for the full specification and `AGENT.md` for working rules
 
 - Sprint 0 (provider feasibility spike): **done — GO (2026-10-16).** 2/2 successful live runs (8 valid JPEG images, 95–125 s/run) with the user-approved automation profile (`docs/spike-report.md`, `docs/provider-permission.md`). Style default: site "Anime".
 - Sprint 1a (foundation): **done (2026-10-16).** Config with hard caps, 5 tables + Alembic baseline, fa locale skeleton, network-blocked tests.
-- Sprint 1b (vertical slice with mock provider): **done (2026-10-16).** Provider interface + mock provider, deterministic prompt builder + content safety, image validation pipeline, CLI (`init-db`, `add-character`, `mock-generate`). 96 tests passing. See `docs/progress.md`.
-- Next: Sprint 2 (real Playwright provider + Selenium comparison) — waiting for explicit approval.
+- Sprint 1b (vertical slice with mock provider): **done (2026-10-16).** Provider interface + mock provider, deterministic prompt builder + content safety, image validation pipeline, CLI (`init-db`, `add-character`, `mock-generate`). See `docs/progress.md`.
+- Sprint 2 (real Playwright provider + Selenium comparison): **done (2026-10-16).** Real adapter with the approved automation profile, `live-smoke --confirm-live` manual command, Selenium comparison probe, typed admin settings (art style + all options changeable — Sprint 3 `/settings` will expose them). 112 tests passing. **Real-testable: `live-smoke` (see below).**
+- Next: Sprint 3 (Telegram admin bot, manual flow) — waiting for explicit approval.
 
 ## Setup (target: WSL2, Python 3.11)
 
@@ -32,6 +33,19 @@ PYTHONPATH=src python3 -m waifubot.cli add-character --name Aki \
     --identity "adult woman, 25 years old, long blue hair, red eyes"
 PYTHONPATH=src python3 -m waifubot.cli mock-generate --character Aki --count 4 --seed 42
 ```
+
+## Live smoke test (Sprint 2 — real provider, on the user's machine only)
+
+Opens a real browser and sends real generation requests. Always opt-in:
+
+```bash
+PYTHONPATH=src python3 -m waifubot.cli live-smoke --confirm-live --runs 3
+```
+
+- Refuses to run without `--confirm-live` (exit 2). Runs are bounded (max 10) and spaced (default 30 s).
+- Style comes from the `default_style` admin setting ("Anime" by default; use `--style no_style` for prompt-only style).
+- Images are validated and stored as `pending_review` like any real job.
+- Selenium comparison probe (optional, throwaway): `python tools/spike/selenium_compare.py --config config/providers/perchance.yaml --confirm-live` (needs `pip install selenium`).
 
 ## Safety
 

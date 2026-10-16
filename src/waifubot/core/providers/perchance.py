@@ -1,0 +1,351 @@
+"""Perchance provider adapter — async Playwright (Sprint 2).
+
+Built from the Sprint 0 spike that worked on the user's machine with the
+user-approved automation profile (AGENT.md amendment log). Rules that stay:
+
+- Plain fill/click first; human-paced typing + the approved launch profile are
+  a recorded user decision (docs/provider-permission.md).
+- NO CAPTCHA solving, NO challenge bypass, NO proxy rotation. A challenge page
+  is `blocked_by_provider` — a permanent outcome, never retried (SPEC §10).
+- All page URLs / selectors / style values / pacing live in config
+  (config/providers/perchance.yaml) — never hardcoded here.
+- Hard timeouts on every operation; bounded polling; categorized errors with
+  actionable summaries (SPEC §4). Never log data URLs, cookies, or tokens.
+
+A live run requires the explicit CLI gate (`live-smoke --confirm-live`).
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import random
+import re
+import time
+from collections.abc import Mapping
+from typing import Any
+
+from waifubot.core.image_provider import (
+    ERROR_BLOCKED,
+    ERROR_PROVIDER,
+    ERROR_TIMEOUT,
+    STATUS_BLOCKED,
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_PARTIAL,
+    STATUS_TIMEOUT,
+    GenerationRequest,
+    GenerationResult,
+    ImageCandidate,
+)
+
+BLOCKED_MARKERS = (
+    "captcha",
+    "challenge",
+    "access denied",
+    "rate limit",
+    "too many requests",
+    "verify you are human",
+    "unusual traffic",
+)
+
+HARD_MAX_TIMEOUT_S = 300
+HARD_MAX_POLL_INTERVAL_S = 30
+HARD_MAX_TYPE_DELAY_MS = 500
+SETTLE_MS = 5000
+PROMPT_VISIBLE_TIMEOUT_MS = 30000
+
+_JS_SCAN = """
+    () => {
+        const fallback = __CANVAS_FALLBACK__;
+        const out = [];
+        const imgs = Array.from(document.querySelectorAll('img'));
+        for (const img of imgs) {
+            const src = img.src || img.getAttribute('src') || '';
+            if (src.startsWith('data:image/') && src.length > 5000) {
+                out.push(src);
+            } else if (fallback && src && !src.includes('icon') && !src.includes('logo')
+                       && img.width > 150) {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth || img.width || 512;
+                    canvas.height = img.naturalHeight || img.height || 512;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+                    if (dataUrl.length > 5000) {
+                        out.push(dataUrl);
+                    }
+                } catch (e) {}
+            }
+        }
+        if (fallback) {
+            for (const c of document.querySelectorAll('canvas')) {
+                try {
+                    if (c.width > 200 && c.height > 200) {
+                        const dataUrl = c.toDataURL('image/jpeg', 0.95);
+                        if (dataUrl && dataUrl.length > 5000) {
+                            out.push(dataUrl);
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
+        return out;
+    }
+"""
+
+
+def detect_block(text: str, url: str) -> str | None:
+    # Normalize separators so URL slugs like "rate-limit" match "rate limit".
+    low = f"{text} {url}".lower().replace("-", " ").replace("_", " ")
+    for marker in BLOCKED_MARKERS:
+        if marker in low:
+            return marker
+    return None
+
+
+def decode_data_url(data_url: str) -> tuple[str, bytes] | None:
+    """Parse a data: URL into (mime, raw bytes). Returns None if malformed."""
+    m = re.match(r"^data:([^;,]+)(;base64)?,(.*)$", data_url, re.DOTALL)
+    if not m:
+        return None
+    mime = m.group(1).strip().lower()
+    try:
+        raw = base64.b64decode(m.group(3), validate=True)
+    except Exception:  # noqa: BLE001 — malformed Base64 is a categorized reject
+        return None
+    return (mime, raw) if raw else None
+
+
+def clamp_limits(limits: Mapping[str, Any]) -> dict[str, float]:
+    timeout_s = float(limits.get("timeout_s", 240))
+    poll_s = float(limits.get("poll_interval_s", 3.0))
+    return {
+        "timeout_s": min(max(10.0, timeout_s), HARD_MAX_TIMEOUT_S),
+        "poll_interval_s": min(max(1.0, poll_s), HARD_MAX_POLL_INTERVAL_S),
+        "min_data_url_chars": float(limits.get("min_data_url_chars", 5000)),
+        "include_canvas_fallback": bool(limits.get("include_canvas_fallback", True)),
+    }
+
+
+def clamp_pacing(launch: Mapping[str, Any]) -> tuple[int, int]:
+    pacing = launch.get("human_pacing", {}) or {}
+    lo = int(pacing.get("type_delay_ms_min", 40))
+    hi = int(pacing.get("type_delay_ms_max", 120))
+    lo = min(max(10, lo), 300)
+    hi = min(max(lo, hi), HARD_MAX_TYPE_DELAY_MS)
+    return lo, hi
+
+
+class PerchanceProvider:
+    name = "perchance_playwright"
+
+    def __init__(self, cfg: Mapping[str, Any]) -> None:
+        self._cfg = cfg
+        self._limits = clamp_limits(cfg.get("limits", {}) or {})
+        self._pacing = clamp_pacing(cfg.get("launch", {}) or {})
+        self._context: Any = None
+        self._browser: Any = None
+        self._pw: Any = None
+
+    # ---- browser lifecycle -------------------------------------------------
+    async def _launch(self) -> Any:  # noqa: ANN202
+        from playwright.async_api import async_playwright
+
+        launch_cfg = self._cfg.get("launch", {}) or {}
+        self._pw = await async_playwright().start()
+        kwargs: dict[str, Any] = {"headless": bool(launch_cfg.get("headless", False))}
+        slow_mo = int(launch_cfg.get("slow_mo_ms", 100))
+        if slow_mo > 0:
+            kwargs["slow_mo"] = min(slow_mo, 2000)
+        args = launch_cfg.get("args") or []
+        if args:
+            kwargs["args"] = [str(a) for a in args]
+        user_data_dir = str(launch_cfg.get("user_data_dir", "") or "")
+        if user_data_dir:
+            self._context = await self._pw.chromium.launch_persistent_context(
+                user_data_dir, **kwargs
+            )
+            return self._context.pages[0] if self._context.pages else await self._context.new_page()
+        self._browser = await self._pw.chromium.launch(**kwargs)
+        self._context = await self._browser.new_context()
+        return await self._context.new_page()
+
+    async def close(self) -> None:
+        if self._context is not None:
+            try:
+                await self._context.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._context = None
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._browser = None
+        if self._pw is not None:
+            try:
+                await self._pw.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._pw = None
+
+    # ---- helpers ----------------------------------------------------------
+    async def _blocked_reason(self, page: Any) -> str | None:  # noqa: ANN201
+        try:
+            text = await page.inner_text("body", timeout=5000)
+        except Exception:  # noqa: BLE001
+            text = ""
+        return detect_block(text, page.url)
+
+    async def _human_type(self, locator: Any, text: str) -> None:  # noqa: ANN201
+        lo, hi = self._pacing
+        for ch in text:
+            await locator.type(ch)
+            delay = random.uniform(lo, hi) / 1000.0
+            if random.random() < 0.10:
+                delay += random.uniform(0.25, 0.6)  # occasional short pause
+            await asyncio.sleep(delay)
+
+    async def _collect(self, page: Any) -> list[str]:  # noqa: ANN201
+        js = _JS_SCAN.replace(
+            "__CANVAS_FALLBACK__",
+            "true" if self._limits["include_canvas_fallback"] else "false",
+        )
+        urls: list[str] = []
+        for frame in page.frames:
+            try:
+                found = await frame.evaluate(js)
+            except Exception:  # noqa: BLE001 — frame may be detached or cross-origin
+                continue
+            urls.extend(found)
+        seen: set[str] = set()
+        out: list[str] = []
+        for u in urls:
+            if u not in seen and len(u) > self._limits["min_data_url_chars"]:
+                seen.add(u)
+                out.append(u)
+        return out
+
+    # ---- interface --------------------------------------------------------
+    async def health_check(self) -> bool:
+        """Page loads, not blocked, prompt visible. Never generates an image."""
+        try:
+            page = await self._launch()
+            await page.goto(self._cfg["page_url"], wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(SETTLE_MS)
+            if await self._blocked_reason(page):
+                return False
+            frame = page.frame_locator(self._cfg["output_iframe"])
+            await frame.locator(self._cfg["selectors"]["prompt_textarea"]).wait_for(
+                state="visible", timeout=PROMPT_VISIBLE_TIMEOUT_MS
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+        finally:
+            await self.close()
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        t0 = time.monotonic()
+        notes: list[str] = []
+
+        def finish(status: str, candidates: list[ImageCandidate], code=None, summary=None):  # noqa: ANN001, ANN202
+            return GenerationResult(
+                status=status,
+                candidates=candidates,
+                elapsed_s=round(time.monotonic() - t0, 2),
+                provider=self.name,
+                error_code=code,
+                error_summary=summary,
+                notes=tuple(notes),
+            )
+
+        try:
+            page = await self._launch()
+        except Exception as e:  # noqa: BLE001
+            return finish(STATUS_ERROR, [], ERROR_PROVIDER,
+                          f"browser launch failed: {type(e).__name__}")
+
+        try:
+            try:
+                await page.goto(
+                    self._cfg["page_url"], wait_until="domcontentloaded", timeout=60000
+                )
+            except Exception as e:  # noqa: BLE001
+                return finish(
+                    STATUS_ERROR, [], "page_error", f"page failed to load: {type(e).__name__}"
+                )
+            await page.wait_for_timeout(SETTLE_MS)
+
+            reason = await self._blocked_reason(page)
+            if reason:
+                return finish(STATUS_BLOCKED, [], ERROR_BLOCKED, f"blocked on load: {reason}")
+
+            frame = page.frame_locator(self._cfg["output_iframe"])
+            selectors = self._cfg["selectors"]
+            prompt_box = frame.locator(selectors["prompt_textarea"])
+            try:
+                await prompt_box.wait_for(state="visible", timeout=PROMPT_VISIBLE_TIMEOUT_MS)
+            except Exception:  # noqa: BLE001
+                return finish(
+                    "error", [], "selector_timeout",
+                    "prompt textarea not visible — page structure changed? "
+                    "verify selectors in config/providers/perchance.yaml",
+                )
+
+            await prompt_box.click()
+            await asyncio.sleep(0.5)
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await self._human_type(prompt_box, request.prompt)
+
+            if request.style_value:
+                try:
+                    await frame.locator(selectors["style_select"]).select_option(
+                        value=request.style_value, timeout=10000
+                    )
+                except Exception:  # noqa: BLE001
+                    notes.append("style_select_failed")  # non-fatal (user decision)
+            gen = frame.locator(selectors["generate_button"])
+            try:
+                await gen.hover()
+                await asyncio.sleep(random.uniform(0.5, 1.2))
+                await gen.click(force=True, timeout=30000)
+            except Exception:  # noqa: BLE001
+                return finish(
+                    "error", [], "selector_timeout",
+                    "generate button not clickable — verify selectors in config",
+                )
+
+            deadline = time.monotonic() + self._limits["timeout_s"]
+            collected: dict[str, ImageCandidate] = {}
+            while time.monotonic() < deadline:
+                await asyncio.sleep(self._limits["poll_interval_s"])
+                reason = await self._blocked_reason(page)
+                if reason:
+                    return finish(STATUS_BLOCKED, list(collected.values()), ERROR_BLOCKED,
+                                  f"blocked during poll: {reason}")
+                for url in await self._collect(page):
+                    if url in collected:
+                        continue
+                    parsed = decode_data_url(url)
+                    if not parsed:
+                        continue
+                    mime, raw = parsed
+                    collected[url] = ImageCandidate(
+                        data=raw, claimed_mime=mime, source="img[data-url]"
+                    )
+                if len(collected) >= request.count:
+                    break
+
+            candidates = list(collected.values())
+            if len(candidates) >= request.count:
+                return finish(STATUS_OK, candidates)
+            if candidates:
+                return finish(STATUS_PARTIAL, candidates)
+            return finish(STATUS_TIMEOUT, [], ERROR_TIMEOUT,
+                          "no images appeared before the timeout")
+        finally:
+            await self.close()

@@ -22,18 +22,31 @@ Living document — updated every sprint.
   (explained in `docs/provider-interface.md`); mock provider simulating all outcomes;
   Perchance adapter config-gated until Sprint 2 (`config/providers/perchance.yaml` holds
   the proven selectors + Anime style mapping + approved launch profile).
-- Deterministic prompt builder (`core/prompt_builder.py`): seeded RNG, tag pool
-  (`config/tags_pool.yaml`), fixed structure identity → style lock → scene → quality,
-  2048-char cap, golden snapshot test. Content safety (`core/content_safety.py`):
-  adult-identity validation + minor-coded blocklist on the final prompt (`config/blocklist.yaml`).
-- Image pipeline (`core/image_pipeline.py`): SHA-256 dedupe, Pillow validation with
-  decompression-bomb guard, format-derived extensions, atomic UUID-named saves.
-- Generation service (`services/generation.py`): SPEC §10 job lifecycle; `blocked_by_provider`
-  is permanent. CLI (`python -m waifubot.cli`): `init-db`, `add-character`, `mock-generate`
-  — the full flow was run for real (job succeeded, 3 validated images stored).
-- Tests: 96 passing, network blocked in all tests; ruff clean.
+- Deterministic prompt builder + content safety + image pipeline + generation service +
+  CLI (`init-db`, `add-character`, `mock-generate`). 96 tests passing.
 
-## Next: Sprint 2 — Real Playwright provider (+ Selenium comparison)
-Re-verify the style option values from the page dump, adapt with hard timeouts, small live
-smoke test (3 runs) with prior notice to the user. Waiting for explicit user approval.
+## Sprint 2 — Real Playwright provider + Selenium comparison — **DONE (2026-10-16)**
+- **Real adapter** `core/providers/perchance.py` (async Playwright): user-approved launch
+  profile + human-paced typing (config-driven pacing), iframe-scoped selectors from config,
+  hard timeouts, bounded polling, progressive candidate collection, `blocked_by_provider`
+  is permanent, categorized actionable errors (`selector_timeout`, `page_error`, …), never
+  logs data URLs/cookies. `health_check` never generates an image.
+- **Manual live command** `python -m waifubot.cli live-smoke --confirm-live` (refuses
+  without the flag; runs ≤ 10, spaced; real jobs + validated images stored via the 1b pipeline).
+- **Selenium comparison probe** `tools/spike/selenium_compare.py` (throwaway, opt-in): the
+  "test both tools" comparison; production stays on async Playwright (already proven).
+- **Typed admin settings** `core/admin_settings.py` (user decision 2026-10-16: art style and
+  every option must be changeable from the bot): `default_style`, `style_lock`, `images_per_job`,
+  `daily_cap`, `posting_interval_s`, `retention_days` — code-defined type/range/default; DB
+  values can never exceed env hard limits. Sprint 3 `/settings` will expose all of them.
+- Tests: 112 passing (no network/browser), ruff clean. Live path is manual-only (user machine).
 
+## Confirmed for Sprint 3 (Telegram admin bot)
+- `/settings` must expose ALL admin-tunable values including art style (`default_style` key →
+  per-provider style mapping) and `style_lock` (in-prompt art style definition) — per user
+  decision 2026-10-16 and SPEC §4/§11.
+- Needs from the user at Sprint 3 start: bot token (in `.env` only), admin numeric IDs,
+  test channel ID.
+
+## Next: Sprint 3 — Telegram admin bot, manual flow
+Waiting for explicit user approval.

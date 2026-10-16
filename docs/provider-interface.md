@@ -12,7 +12,11 @@ report (`docs/spike-report.md`). How each decision maps to measured behavior:
 | 6 candidates → 4 valid (validation/dedupe filtered 2) | The pipeline, not the provider, owns validation, SHA-256 dedupe, and atomic saves; rejection reasons are categorized |
 | Provider page must be switchable | All page URLs, selectors, style values, and the approved launch profile live in `config/providers/perchance.yaml`; the factory is config-driven (`name: mock` vs `name: perchance_playwright`) |
 
-The Perchance adapter (`perchance_playwright`) is **config-gated off until Sprint 2** —
-`create_provider` refuses it with a clear error. The mock provider simulates every
-outcome observed or feared: `ok`, `partial`, `malformed`, `blocked`, `timeout`,
-`error`, `empty`.
+The Perchance adapter (`perchance_playwright`) is **implemented in Sprint 2**
+(`core/providers/perchance.py`, async Playwright) with the user-approved launch
+profile and human-paced typing (config-driven pacing in `config/providers/perchance.yaml`).
+Live execution happens only through `python -m waifubot.cli live-smoke --confirm-live`.
+The Selenium comparison probe (`tools/spike/selenium_compare.py`, throwaway) covers the
+"test both tools" decision; production stays on async Playwright (already proven live).
+The mock provider simulates every outcome observed or feared: `ok`, `partial`,
+`malformed`, `blocked`, `timeout`, `error`, `empty`.

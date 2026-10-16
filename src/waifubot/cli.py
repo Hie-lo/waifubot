@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import os
 import sys
+import uuid
 from pathlib import Path
 
 from sqlalchemy import select
@@ -25,7 +26,11 @@ from waifubot.config import Settings, ensure_runtime_dirs
 from waifubot.core.content_safety import load_blocklist, validate_adult_identity
 from waifubot.core.image_pipeline import ImagePipeline
 from waifubot.core.prompt_builder import PromptBuilder
-from waifubot.core.providers import create_provider, load_provider_config
+from waifubot.core.providers import (
+    create_provider,
+    load_provider_config,
+    validate_provider_config,
+)
 from waifubot.core.tags_pool import load_tags_pool
 from waifubot.db.models import Character
 from waifubot.db.session import make_engine, make_session_factory
@@ -139,6 +144,92 @@ async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
         await engine.dispose()
 
 
+async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
+    """Sprint 2 manual live smoke (SPEC: bounded runs, prior notice, real provider)."""
+    if not args.confirm_live:
+        print(
+            "ERROR: refusing to run without --confirm-live. "
+            "This opens a real browser and sends real generation requests.",
+            file=sys.stderr,
+        )
+        return 2
+
+    runs = min(max(1, args.runs), 10)  # hard max
+    spacing = max(0, args.spacing)
+
+    builder, pipeline, _blocklist = _load_stack(settings)
+    provider_cfg = load_provider_config(Path(args.config))
+    validate_provider_config(provider_cfg)
+    provider = create_provider(provider_cfg)
+
+    # Style: admin setting -> provider style mapping (never invented).
+    from waifubot.core.admin_settings import AdminSettings
+
+    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)))
+    style_key = args.style or await admin.get("default_style")
+    style_values = provider_cfg.get("style_values", {}) or {}
+    if style_key not in style_values:
+        print(f"error: unknown style {style_key!r}; known: {sorted(style_values)}", file=sys.stderr)
+        await provider.close()
+        return 2
+    style_value = style_values[style_key]
+    count = args.count or await admin.get("images_per_job")
+
+    print("[live] WARNING: a real browser will open and real generation requests will be sent.")
+    print(f"[live] provider={provider.name} page={provider_cfg.get('page_url')} "
+          f"style_key={style_key!r} count={count} runs={runs} spacing={spacing}s")
+
+    engine = make_engine(settings.db_url)
+    try:
+        factory = make_session_factory(engine)
+        async with factory() as session:
+            identity = args.identity
+            style_lock = args.style_lock
+            if args.character:
+                result = await session.execute(
+                    select(Character).where(Character.name == args.character)
+                )
+                row = result.scalars().first()
+                if row is None:
+                    print(f"error: character {args.character!r} not found", file=sys.stderr)
+                    return 1
+                identity = row.identity_prompt
+                style_lock = style_lock or row.style_lock
+        for i in range(1, runs + 1):
+            print(f"\n[live] === run {i}/{runs} ===")
+            async with factory() as session:
+                job, images, result = await run_generation_job(
+                    session,
+                    provider=provider,
+                    pipeline=pipeline,
+                    builder=builder,
+                    identity=identity or "adult woman, 25 years old, long blue hair, red eyes",
+                    style_lock=style_lock or await admin.get("style_lock"),
+                    count=count,
+                    seed=args.seed,
+                    style_value=style_value,
+                    timeout_s=float(provider_cfg.get("limits", {}).get("timeout_s", 240)),
+                    idempotency_key=f"live:{uuid.uuid4().hex}",
+                    requested_by="cli-live",
+                )
+                await session.commit()
+                print(f"[live] job={job.id} status={job.status} images={len(images)} "
+                      f"provider_result={result.status if result else '?'} "
+                      f"elapsed={result.elapsed_s if result else '?'}s")
+                if job.error_code:
+                    print(f"[live] error_code={job.error_code} summary={job.error_summary or ''}")
+                if result and result.notes:
+                    print(f"[live] notes: {', '.join(result.notes)}")
+            if i < runs and spacing > 0:
+                print(f"[live] spacing {spacing}s...")
+                await asyncio.sleep(spacing)
+    finally:
+        await provider.close()
+        await engine.dispose()
+    print("\n[live] done. Review storage/images and the jobs table before continuing.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="waifubot")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -164,6 +255,24 @@ def main(argv: list[str] | None = None) -> int:
         help="override mock mode (ok/partial/malformed/blocked/timeout/error/empty)",
     )
 
+    p_live = sub.add_parser(
+        "live-smoke", help="LIVE provider runs — opens a real browser (Sprint 2 smoke test)"
+    )
+    p_live.add_argument("--confirm-live", action="store_true",
+                        help="required: confirm a real browser and real generations")
+    p_live.add_argument("--runs", type=int, default=3)
+    p_live.add_argument("--spacing", type=int, default=30, help="seconds between runs")
+    p_live.add_argument("--count", type=int, default=0, help="images per run (0 = from settings)")
+    p_live.add_argument("--style", default="", help="style key (0 = default_style setting)")
+    p_live.add_argument("--seed", type=int, default=None)
+    p_live.add_argument(
+        "--config", default=str(REPO_ROOT / "config" / "providers" / "perchance.yaml")
+    )
+    p_live.add_argument("--character", default="", help="saved character name")
+    p_live.add_argument("--identity", default="",
+                        help="one-off identity (default: an adult test identity)")
+    p_live.add_argument("--style-lock", default="")
+
     args = parser.parse_args(argv)
     try:
         settings = Settings.from_env()
@@ -174,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_add_character(settings, args))
         if args.command == "mock-generate":
             return asyncio.run(_mock_generate(settings, args))
+        if args.command == "live-smoke":
+            return asyncio.run(_live_smoke(settings, args))
     except WaifuBotError as e:
         print(f"error [{e.code}]: {e}", file=sys.stderr)
         return 2
