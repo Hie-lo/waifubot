@@ -1,0 +1,23 @@
+# Sprint 0 spike config (THROWAWAY). Copy to spike_config.yaml and adjust.
+# Hard caps are enforced in code: count<=10, timeout<=300s.
+
+page_url: "https://perchance.org/ai-text-to-image-generator"
+headless: false          # visible first; headless only if permitted & tested
+count: 4                # images per run
+timeout_s: 240
+poll_interval_s: 3.0
+spacing_s: 30           # between runs (respect permitted rate)
+min_width: 256
+min_height: 256
+max_bytes: 10485760     # 10 MB
+output_dir: "storage/spike_out"
+
+# Selectors (baseline from PoC; VERIFY against real page)
+prompt_textarea: "textarea[data-name='description']"
+style_select: "select[data-name='artStyle']"
+generate_button: "button#generateButtonEl"
+output_iframe: "#outputIframeEl"
+
+# Optional
+style_value: ""         # e.g. "Soft Anime" if verified
+prompt: "a friendly anime girl, soft lighting, high quality"
