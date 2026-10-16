@@ -1,11 +1,14 @@
 """Admin-tunable settings (SPEC §4): typed values in the `settings` table, each
-with a code-defined type, range, and default. The Sprint 3 `/settings` command
-exposes ALL of these in the bot (including art style), per the user's decision
+with a code-defined type, range, and default. The `/settings` command exposes
+ALL of these in the bot (including art style), per the user's decision
 (2026-10-16): every option must be changeable from the bot itself.
 
-A database value can NEVER override a hard limit from the environment
-(SPEC §4): `images_per_job` is bounded by MAX_IMAGES_PER_JOB and `daily_cap`
-by MAX_JOBS_PER_DAY.
+USER RULE (2026-10-16, supersedes the earlier env-cap reading of SPEC §4):
+the admin can change ANY setting freely within its defined range
+(images_per_job 1-20, daily_cap 1-100, ...). Environment values
+(MAX_IMAGES_PER_JOB, MAX_JOBS_PER_DAY) are DEFAULTS for a fresh install only —
+they never clamp what the admin sets. The only hard limits are the code safety
+ceilings (HARD_MAX_*), which no database value may exceed (SPEC §4).
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from waifubot.config import HARD_MAX_IMAGES_PER_JOB, HARD_MAX_JOBS_PER_DAY
 from waifubot.db.models import Setting
 from waifubot.errors import ConfigError
 
@@ -49,10 +53,11 @@ SPECS_BY_KEY: dict[str, SettingSpec] = {s.key: s for s in SETTINGS_SPECS}
 
 @dataclass(frozen=True)
 class AdminHardLimits:
-    """Env hard caps; DB values may never exceed these."""
+    """Code safety ceilings (SPEC §4); DB values may never exceed these.
+    NOT the env defaults — the admin is free to change settings up to here."""
 
-    max_images_per_job: int = 20
-    max_jobs_per_day: int = 100
+    max_images_per_job: int = HARD_MAX_IMAGES_PER_JOB
+    max_jobs_per_day: int = HARD_MAX_JOBS_PER_DAY
 
 
 class AdminSettings:

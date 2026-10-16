@@ -137,3 +137,24 @@ def test_all_settings_survives_corrupt_row(settings: AdminSettings) -> None:
         assert out["images_per_job"] == 4
 
     _run(body())
+
+
+def test_default_hard_limits_fully_changeable_by_admin(tmp_path: Path) -> None:
+    """USER RULE 2026-10-16: settings are fully changeable by the admin within
+    their defined range; env values are defaults only, never clamps."""
+
+    async def body() -> None:
+        engine = make_engine(f"sqlite+aiosqlite:///{tmp_path / 'd.db'}")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        factory = make_session_factory(engine)
+        admin = AdminSettings(factory)  # defaults: code ceilings 20 / 100
+        assert await admin.set("daily_cap", 50) == 50
+        assert await admin.set("images_per_job", 20) == 20
+        assert await admin.get("daily_cap") == 50
+        # only the code safety ceiling still applies
+        with pytest.raises(ConfigError, match="hard limit"):
+            await admin.set("daily_cap", 101)
+        await engine.dispose()
+
+    _run(body())

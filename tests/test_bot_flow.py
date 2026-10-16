@@ -368,3 +368,18 @@ def test_precise_face_prompt_wizard_and_menu(env: Env) -> None:
         assert "consistent facial features" in row.identity_prompt  # face anchor
 
     _run(body())
+
+
+def test_settings_fully_changeable_by_admin(env: Env) -> None:
+    """USER RULE 2026-10-16: the admin can change any setting freely."""
+
+    async def body() -> None:
+        await env.app.handle_message(env.msg("/settings", update_id=1))
+        await env.app.handle_callback(env.cb("set:daily_cap", update_id=2))
+        await env.app.handle_message(env.msg("50", update_id=3))
+        assert await env.settings.get("daily_cap") == 50  # no hard-limit refusal
+        await env.app.handle_callback(env.cb("set:images_per_job", update_id=4))
+        await env.app.handle_message(env.msg("20", update_id=5))
+        assert await env.settings.get("images_per_job") == 20
+
+    _run(body())
