@@ -163,3 +163,31 @@ def test_cli_auto_migrates_without_init_db(tmp_path: Path) -> None:
     )
     assert gen.returncode == 0, gen.stderr + gen.stdout
     assert "status=succeeded" in gen.stdout
+
+
+def test_set_setting_and_show_settings(tmp_path: Path) -> None:
+    """Runtime-changeable options (user rule 2026-10-16): changeable from the CLI today."""
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT / "src"),
+        "DB_URL": f"sqlite+aiosqlite:///{tmp_path / 'set.db'}",
+        "STORAGE_ROOT": str(tmp_path / "storage"),
+    }
+    for key in ("BOT_TOKEN", "ADMIN_USER_IDS", "DESTINATION_CHAT_ID"):
+        env.pop(key, None)
+    set_run = subprocess.run(
+        [sys.executable, "-m", "waifubot.cli", "set-setting", "daily_cap", "50"],
+        capture_output=True, text=True, env=env, cwd=REPO_ROOT, timeout=120,
+    )
+    assert set_run.returncode == 0, set_run.stderr + set_run.stdout
+    show = subprocess.run(
+        [sys.executable, "-m", "waifubot.cli", "show-settings"],
+        capture_output=True, text=True, env=env, cwd=REPO_ROOT, timeout=120,
+    )
+    assert show.returncode == 0, show.stderr
+    assert "daily_cap = 50" in show.stdout
+    bad = subprocess.run(
+        [sys.executable, "-m", "waifubot.cli", "set-setting", "daily_cap", "9999"],
+        capture_output=True, text=True, env=env, cwd=REPO_ROOT, timeout=120,
+    )
+    assert bad.returncode == 2  # ConfigError -> clean refusal, hard limit wins

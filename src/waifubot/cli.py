@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 import uuid
@@ -90,6 +91,8 @@ async def _add_character(settings: Settings, args: argparse.Namespace) -> int:
 
 
 async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
+    from waifubot.core.admin_settings import AdminSettings
+
     builder, pipeline, blocklist = _load_stack(settings)
     provider_cfg = load_provider_config(MOCK_CONFIG_PATH)
     if args.mode:
@@ -99,6 +102,11 @@ async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
     engine = make_engine(settings.db_url)
     try:
         factory = make_session_factory(engine)
+        # Runtime-changeable caps (user rule 2026-10-16): stored bot setting >
+        # env default > code default; hard limits clamp inside the service.
+        admin = AdminSettings(factory)
+        max_images = await admin.get_or("images_per_job", settings.max_images_per_job)
+        max_jobs = await admin.get_or("daily_cap", settings.max_jobs_per_day)
         async with factory() as session:
             identity = args.identity
             style_lock = args.style_lock
@@ -127,8 +135,8 @@ async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
                 seed=args.seed,
                 idempotency_key=args.idempotency_key,
                 requested_by="cli",
-                max_images_per_job=settings.max_images_per_job,
-                max_jobs_per_day=settings.max_jobs_per_day,
+                max_images_per_job=max_images,
+                max_jobs_per_day=max_jobs,
             )
             await session.commit()
 
@@ -164,6 +172,14 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
     builder, pipeline, _blocklist = _load_stack(settings)
     provider_cfg = load_provider_config(Path(args.config))
     validate_provider_config(provider_cfg)
+    # Visibility override (user request 2026-10-16): test headless runs with the
+    # exact same flow; a window opens only when a challenge needs the operator.
+    if getattr(args, "headless", False):
+        provider_cfg = {**provider_cfg,
+                        "launch": {**(provider_cfg.get("launch") or {}), "headless": True}}
+    elif getattr(args, "headed", False):
+        provider_cfg = {**provider_cfg,
+                        "launch": {**(provider_cfg.get("launch") or {}), "headless": False}}
     provider = create_provider(provider_cfg)
 
     # Style: admin setting -> provider style mapping (never invented).
@@ -177,11 +193,14 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
         await provider.close()
         return 2
     style_value = style_values[style_key]
-    count = args.count or await admin.get("images_per_job")
+    count = args.count or await admin.get_or("images_per_job", settings.max_images_per_job)
+    max_images = await admin.get_or("images_per_job", settings.max_images_per_job)
+    max_jobs = await admin.get_or("daily_cap", settings.max_jobs_per_day)
 
     print("[live] WARNING: a real browser will open and real generation requests will be sent.")
     print(f"[live] provider={provider.name} page={provider_cfg.get('page_url')} "
-          f"style_key={style_key!r} count={count} runs={runs} spacing={spacing}s")
+          f"style_key={style_key!r} count={count} runs={runs} spacing={spacing}s "
+          f"headless={(provider_cfg.get('launch') or {}).get('headless')}")
 
     engine = make_engine(settings.db_url)
     try:
@@ -215,8 +234,8 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
                     timeout_s=float(provider_cfg.get("limits", {}).get("timeout_s", 240)),
                     idempotency_key=f"live:{uuid.uuid4().hex}",
                     requested_by="cli-live",
-                    max_images_per_job=settings.max_images_per_job,
-                    max_jobs_per_day=settings.max_jobs_per_day,
+                    max_images_per_job=max_images,
+                    max_jobs_per_day=max_jobs,
                 )
                 await session.commit()
                 print(f"[live] job={job.id} status={job.status} images={len(images)} "
@@ -233,6 +252,31 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
         await provider.close()
         await engine.dispose()
     print("\n[live] done. Review storage/images and the jobs table before continuing.")
+    return 0
+
+
+async def _set_setting(settings: Settings, args: argparse.Namespace) -> int:
+    """Change a runtime setting (user rule 2026-10-16: changeable options)."""
+    from waifubot.core.admin_settings import AdminSettings
+
+    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)))
+    try:
+        value: object = json.loads(args.value)
+    except (ValueError, TypeError):
+        value = args.value  # plain string, e.g. set-setting default_style anime
+    stored = await admin.set(args.key, value, updated_by="cli")
+    print(f"{args.key} = {stored!r}")
+    print("effective immediately for new jobs (env/default used until now)")
+    return 0
+
+
+async def _show_settings(settings: Settings, args: argparse.Namespace) -> int:  # noqa: ARG001
+    from waifubot.core.admin_settings import AdminSettings
+
+    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)))
+    values = await admin.all_settings()
+    for key in sorted(values):
+        print(f"{key} = {values[key]!r}")
     return 0
 
 
@@ -278,6 +322,21 @@ def main(argv: list[str] | None = None) -> int:
     p_live.add_argument("--identity", default="",
                         help="one-off identity (default: an adult test identity)")
     p_live.add_argument("--style-lock", default="")
+    vis = p_live.add_mutually_exclusive_group()
+    vis.add_argument(
+        "--headless", action="store_true",
+        help="run without a browser window (test mode; a window opens only for challenges)",
+    )
+    vis.add_argument(
+        "--headed", action="store_true",
+        help="force a visible browser window (default per config)",
+    )
+
+    p_set = sub.add_parser("set-setting", help="change a runtime setting (e.g. daily_cap)")
+    p_set.add_argument("key", help="setting key: default_style, style_lock, images_per_job, "
+                                   "daily_cap, posting_interval_s, retention_days")
+    p_set.add_argument("value", help="new value (number or text)")
+    sub.add_parser("show-settings", help="print current runtime settings")
 
     args = parser.parse_args(argv)
     try:
@@ -297,6 +356,10 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_mock_generate(settings, args))
         if args.command == "live-smoke":
             return asyncio.run(_live_smoke(settings, args))
+        if args.command == "set-setting":
+            return asyncio.run(_set_setting(settings, args))
+        if args.command == "show-settings":
+            return asyncio.run(_show_settings(settings, args))
     except WaifuBotError as e:
         print(f"error [{e.code}]: {e}", file=sys.stderr)
         return 2

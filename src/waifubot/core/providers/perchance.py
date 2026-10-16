@@ -53,6 +53,8 @@ HARD_MAX_POLL_INTERVAL_S = 30
 HARD_MAX_TYPE_DELAY_MS = 500
 SETTLE_MS = 5000
 PROMPT_VISIBLE_TIMEOUT_MS = 30000
+# Human-approved challenge restarts (bounded — never uncontrolled retries).
+MAX_CHALLENGE_RESTARTS = 2
 
 _JS_SCAN = """
     () => {
@@ -152,6 +154,10 @@ def clamp_pacing(launch: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+class _Restart(Exception):
+    """Internal: the operator approved a challenge — restart the flow once."""
+
+
 class PerchanceProvider:
     name = "perchance_playwright"
 
@@ -159,6 +165,8 @@ class PerchanceProvider:
         self._cfg = cfg
         self._limits = clamp_limits(cfg.get("limits", {}) or {})
         self._pacing = clamp_pacing(cfg.get("launch", {}) or {})
+        self._headless_default = bool((cfg.get("launch", {}) or {}).get("headless", False))
+        self._headless_state: bool = self._headless_default
         self._context: Any = None
         self._browser: Any = None
         self._pw: Any = None
@@ -169,13 +177,16 @@ class PerchanceProvider:
 
         launch_cfg = self._cfg.get("launch", {}) or {}
         self._pw = await async_playwright().start()
-        kwargs: dict[str, Any] = {"headless": bool(launch_cfg.get("headless", False))}
+        kwargs: dict[str, Any] = {"headless": bool(self._headless_state)}
         slow_mo = int(launch_cfg.get("slow_mo_ms", 100))
         if slow_mo > 0:
             kwargs["slow_mo"] = min(slow_mo, 2000)
         args = launch_cfg.get("args") or []
         if args:
             kwargs["args"] = [str(a) for a in args]
+        channel = str(launch_cfg.get("channel", "") or "")
+        if channel:
+            kwargs["channel"] = channel
         user_data_dir = str(launch_cfg.get("user_data_dir", "") or "")
         if user_data_dir:
             self._context = await self._pw.chromium.launch_persistent_context(
@@ -185,6 +196,13 @@ class PerchanceProvider:
         self._browser = await self._pw.chromium.launch(**kwargs)
         self._context = await self._browser.new_context()
         return await self._context.new_page()
+
+    async def _ensure_page(self) -> Any:  # noqa: ANN202
+        if self._context is not None:
+            return (
+                self._context.pages[0] if self._context.pages else await self._context.new_page()
+            )
+        return await self._launch()
 
     async def close(self) -> None:
         if self._context is not None:
@@ -223,26 +241,50 @@ class PerchanceProvider:
                 delay += random.uniform(p["pause_ms_min"], p["pause_ms_max"]) / 1000.0
             await asyncio.sleep(delay)
 
-    async def _wait_for_operator_challenge(self, page: Any, notes: list[str], where: str) -> bool:
-        """A challenge/block page appeared. WAIT for a HUMAN to approve it in the
-        visible browser window — we never solve or bypass it (AGENT.md prohibition).
-        Returns True if the page cleared (operator approved), False on timeout."""
+    async def _resolve_challenge(self, page: Any, notes: list[str], where: str) -> str:
+        """A challenge/block page appeared. USER DECISION 2026-10-16 flow:
+        - headless runs: reopen a VISIBLE window (same profile) so the operator
+          can tick the challenge; after approval the window closes and the work
+          continues headless.
+        - visible runs: wait for the operator in the open window.
+        The automation NEVER solves or bypasses the challenge (prohibition).
+        Returns "restart" (operator approved — rerun the flow) or "blocked"."""
         budget = self._limits["challenge_wait_s"]
         if budget <= 0:
-            return False
-        print(
-            f"[provider] challenge/block page detected ({where}) — waiting up to "
-            f"{budget:.0f}s for a HUMAN to approve it in the browser window "
-            "(never solved automatically)"
-        )
+            return "blocked"
+        if self._headless_state:
+            print(
+                f"[provider] challenge ({where}) — reopening the browser window so a "
+                "HUMAN can tick it (never solved automatically). "
+                f"Waiting up to {budget:.0f}s..."
+            )
+            await self.close()
+            self._headless_state = False
+            page = await self._launch()
+            try:
+                await page.goto(
+                    self._cfg["page_url"], wait_until="domcontentloaded", timeout=60000
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            print(
+                f"[provider] challenge ({where}) — waiting up to {budget:.0f}s for a "
+                "HUMAN to approve it in the browser window (never solved automatically)"
+            )
         deadline = time.monotonic() + budget
         while time.monotonic() < deadline:
             await asyncio.sleep(5)
             if not await self._blocked_reason(page):
                 notes.append("challenge_approved_by_operator")
                 print("[provider] challenge cleared by operator — continuing")
-                return True
-        return False
+                if self._headless_default and not self._headless_state:
+                    # User flow: the window closes again and the work continues headless.
+                    await self.close()
+                    self._headless_state = True
+                    print("[provider] window closed — continuing headless")
+                return "restart"
+        return "blocked"
 
     async def _collect(self, page: Any) -> list[str]:  # noqa: ANN201
         js = _JS_SCAN.replace(
@@ -298,93 +340,114 @@ class PerchanceProvider:
                 notes=tuple(notes),
             )
 
+        self._headless_state = self._headless_default
+        restarts = 0
         try:
-            page = await self._launch()
+            while True:
+                try:
+                    return await self._run_flow(
+                        request, notes, finish, allow_escalation=restarts < MAX_CHALLENGE_RESTARTS
+                    )
+                except _Restart:
+                    restarts += 1
+                    if restarts > MAX_CHALLENGE_RESTARTS:
+                        return finish(
+                            STATUS_BLOCKED, [], ERROR_BLOCKED,
+                            "challenge reappeared after operator approval",
+                        )
+                    notes.append(f"flow_restarted_after_challenge_{restarts}")
         except Exception as e:  # noqa: BLE001
             return finish(STATUS_ERROR, [], ERROR_PROVIDER,
-                          f"browser launch failed: {type(e).__name__}")
-
-        try:
-            try:
-                await page.goto(
-                    self._cfg["page_url"], wait_until="domcontentloaded", timeout=60000
-                )
-            except Exception as e:  # noqa: BLE001
-                return finish(
-                    STATUS_ERROR, [], "page_error", f"page failed to load: {type(e).__name__}"
-                )
-            await page.wait_for_timeout(SETTLE_MS)
-
-            reason = await self._blocked_reason(page)
-            if reason:
-                if not await self._wait_for_operator_challenge(page, notes, "on load"):
-                    return finish(STATUS_BLOCKED, [], ERROR_BLOCKED,
-                                  f"blocked on load: {reason}")
-
-            frame = page.frame_locator(self._cfg["output_iframe"])
-            selectors = self._cfg["selectors"]
-            prompt_box = frame.locator(selectors["prompt_textarea"])
-            try:
-                await prompt_box.wait_for(state="visible", timeout=PROMPT_VISIBLE_TIMEOUT_MS)
-            except Exception:  # noqa: BLE001
-                return finish(
-                    "error", [], "selector_timeout",
-                    "prompt textarea not visible — page structure changed? "
-                    "verify selectors in config/providers/perchance.yaml",
-                )
-
-            await prompt_box.click()
-            await asyncio.sleep(0.5)
-            await page.keyboard.press("Control+A")
-            await page.keyboard.press("Backspace")
-            await self._human_type(prompt_box, request.prompt)
-
-            if request.style_value:
-                try:
-                    await frame.locator(selectors["style_select"]).select_option(
-                        value=request.style_value, timeout=10000
-                    )
-                except Exception:  # noqa: BLE001
-                    notes.append("style_select_failed")  # non-fatal (user decision)
-            gen = frame.locator(selectors["generate_button"])
-            try:
-                await gen.hover()
-                await asyncio.sleep(random.uniform(0.5, 1.2))
-                await gen.click(force=True, timeout=30000)
-            except Exception:  # noqa: BLE001
-                return finish(
-                    "error", [], "selector_timeout",
-                    "generate button not clickable — verify selectors in config",
-                )
-
-            deadline = time.monotonic() + self._limits["timeout_s"]
-            collected: dict[str, ImageCandidate] = {}
-            while time.monotonic() < deadline:
-                await asyncio.sleep(self._limits["poll_interval_s"])
-                reason = await self._blocked_reason(page)
-                if reason:
-                    if not await self._wait_for_operator_challenge(page, notes, "during poll"):
-                        return finish(STATUS_BLOCKED, list(collected.values()), ERROR_BLOCKED,
-                                      f"blocked during poll: {reason}")
-                for url in await self._collect(page):
-                    if url in collected:
-                        continue
-                    parsed = decode_data_url(url)
-                    if not parsed:
-                        continue
-                    mime, raw = parsed
-                    collected[url] = ImageCandidate(
-                        data=raw, claimed_mime=mime, source="img[data-url]"
-                    )
-                if len(collected) >= request.count:
-                    break
-
-            candidates = list(collected.values())
-            if len(candidates) >= request.count:
-                return finish(STATUS_OK, candidates)
-            if candidates:
-                return finish(STATUS_PARTIAL, candidates)
-            return finish(STATUS_TIMEOUT, [], ERROR_TIMEOUT,
-                          "no images appeared before the timeout")
+                          f"unexpected provider failure: {type(e).__name__}")
         finally:
             await self.close()
+
+    async def _run_flow(self, request, notes, finish, *, allow_escalation):  # noqa: ANN001, ANN202
+        page = await self._ensure_page()
+
+        try:
+            await page.goto(
+                self._cfg["page_url"], wait_until="domcontentloaded", timeout=60000
+            )
+        except Exception as e:  # noqa: BLE001
+            return finish(
+                STATUS_ERROR, [], "page_error", f"page failed to load: {type(e).__name__}"
+            )
+        await page.wait_for_timeout(SETTLE_MS)
+
+        reason = await self._blocked_reason(page)
+        if reason:
+            if allow_escalation:
+                decision = await self._resolve_challenge(page, notes, "on load")
+                if decision == "restart":
+                    raise _Restart()
+            return finish(STATUS_BLOCKED, [], ERROR_BLOCKED, f"blocked on load: {reason}")
+
+        frame = page.frame_locator(self._cfg["output_iframe"])
+        selectors = self._cfg["selectors"]
+        prompt_box = frame.locator(selectors["prompt_textarea"])
+        try:
+            await prompt_box.wait_for(state="visible", timeout=PROMPT_VISIBLE_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001
+            return finish(
+                "error", [], "selector_timeout",
+                "prompt textarea not visible — page structure changed? "
+                "verify selectors in config/providers/perchance.yaml",
+            )
+
+        await prompt_box.click()
+        await asyncio.sleep(0.5)
+        await page.keyboard.press("Control+A")
+        await page.keyboard.press("Backspace")
+        await self._human_type(prompt_box, request.prompt)
+
+        if request.style_value:
+            try:
+                await frame.locator(selectors["style_select"]).select_option(
+                    value=request.style_value, timeout=10000
+                )
+            except Exception:  # noqa: BLE001
+                notes.append("style_select_failed")  # non-fatal (user decision)
+        gen = frame.locator(selectors["generate_button"])
+        try:
+            await gen.hover()
+            await asyncio.sleep(random.uniform(0.5, 1.2))
+            await gen.click(force=True, timeout=30000)
+        except Exception:  # noqa: BLE001
+            return finish(
+                "error", [], "selector_timeout",
+                "generate button not clickable — verify selectors in config",
+            )
+
+        deadline = time.monotonic() + self._limits["timeout_s"]
+        collected: dict[str, ImageCandidate] = {}
+        while time.monotonic() < deadline:
+            await asyncio.sleep(self._limits["poll_interval_s"])
+            reason = await self._blocked_reason(page)
+            if reason:
+                if allow_escalation:
+                    decision = await self._resolve_challenge(page, notes, "during poll")
+                    if decision == "restart":
+                        raise _Restart()
+                return finish(STATUS_BLOCKED, list(collected.values()), ERROR_BLOCKED,
+                              f"blocked during poll: {reason}")
+            for url in await self._collect(page):
+                if url in collected:
+                    continue
+                parsed = decode_data_url(url)
+                if not parsed:
+                    continue
+                mime, raw = parsed
+                collected[url] = ImageCandidate(
+                    data=raw, claimed_mime=mime, source="img[data-url]"
+                )
+            if len(collected) >= request.count:
+                break
+
+        candidates = list(collected.values())
+        if len(candidates) >= request.count:
+            return finish(STATUS_OK, candidates)
+        if candidates:
+            return finish(STATUS_PARTIAL, candidates)
+        return finish(STATUS_TIMEOUT, [], ERROR_TIMEOUT,
+                      "no images appeared before the timeout")

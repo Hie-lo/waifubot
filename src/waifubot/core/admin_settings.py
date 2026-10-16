@@ -112,6 +112,25 @@ class AdminSettings:
         async with self._sessions() as s:
             return await _read(s)
 
+    async def get_or(self, key: str, fallback: Any, session: AsyncSession | None = None) -> Any:
+        """Like get(), but `fallback` replaces the spec default when no row exists.
+        Priority (user rule 2026-10-16, runtime-changeable options): stored bot
+        setting > env/config default > code default; hard limits still clamp."""
+        spec = SPECS_BY_KEY.get(key)
+        if spec is None:
+            raise ConfigError(f"unknown setting {key!r}")
+        if session is not None:
+            row = await session.get(Setting, key)
+        else:
+            async with self._sessions() as s:
+                row = await s.get(Setting, key)
+        if row is None:
+            return self.validate(key, fallback)
+        try:
+            return self.validate(key, json.loads(row.value_json))
+        except (ConfigError, TypeError, ValueError):
+            return self.validate(key, fallback)
+
     async def set(self, key: str, value: Any, updated_by: str = "admin") -> Any:
         value = self.validate(key, value)
         async with self._sessions() as s:

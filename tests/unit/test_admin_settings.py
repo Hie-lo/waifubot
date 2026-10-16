@@ -107,3 +107,17 @@ def test_get_falls_back_to_default_on_invalid_stored_value(settings: AdminSettin
         assert await settings.get("daily_cap") == 20
 
     _run(body())
+
+
+def test_get_or_prefers_stored_value_then_fallback(settings: AdminSettings) -> None:
+    async def body() -> None:
+        # No row -> fallback (e.g. env default) is used and validated.
+        # (fixture hard max for daily_cap is 30)
+        assert await settings.get_or("daily_cap", 25) == 25
+        await settings.set("daily_cap", 20)
+        assert await settings.get_or("daily_cap", 25) == 20
+        # Invalid fallback raises only when no row exists (hard limits still win).
+        with pytest.raises(ConfigError):
+            await settings.get_or("images_per_job", 9999)
+
+    _run(body())

@@ -65,6 +65,13 @@ Living document — updated every sprint.
   stale/invalid stored value — now falls back to the default. Verified model↔migration consistency,
   FK pragma, session handling, mock bounds, atomic saves. Landmines documented: self-referential
   `Character.parent/children` needs `awaitable_attrs`; daily-cap day boundary is UTC.
+- **Headless + runtime options (2026-10-16, user request):** `live-smoke --headless/--headed`
+  visibility flags; challenge flow = window opens only for the challenge, user ticks, window
+  closes, work continues headless (bounded `MAX_CHALLENGE_RESTARTS=2`); `set-setting`/
+  `show-settings` CLI + `AdminSettings.get_or` (stored > env > default) make caps and all
+  SETTINGS_SPECS runtime-changeable today. Pending user test: whether headless delivers
+  images on the provider (fallback of human-like checkbox automation authorized but NOT
+  implemented until results).
 
 ## Confirmed for Sprint 3 (Telegram admin bot)
 - `/settings` must expose ALL admin-tunable values including art style (`default_style` key →

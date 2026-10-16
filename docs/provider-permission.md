@@ -15,7 +15,16 @@
 
 ## Non-negotiable safety behavior (applies to every sprint)
 
-- On CAPTCHA, challenge, explicit rate limit, or access-denied page: the adapter waits (config `challenge_wait_s`, default 180 s) for the **user** to approve it in the visible browser window and continues if it clears (user decision 2026-10-16; the automation itself never solves it). If it does not clear within the budget: stop the job, record `blocked_by_provider`, notify admin. No stealth flags, no bypass, no proxy rotation, no extra retries.
+- On CAPTCHA, challenge, explicit rate limit, or access-denied page: in headless runs the
+  browser window is REOPENED visibly (same profile) so the **user** can tick the challenge;
+  after approval the window closes and the work continues headless. In visible runs the
+  adapter waits in the open window (config `challenge_wait_s`, default 180 s; bounded
+  `MAX_CHALLENGE_RESTARTS=2`) (user decision 2026-10-16; the automation itself never solves
+  it). If it does not clear within the budget: stop the job, record `blocked_by_provider`,
+  notify admin. No stealth flags, no bypass, no proxy rotation, no extra retries.
+  **Pending user test:** if this flow cannot work (headless not accepted by the provider, or
+  approval does not carry back to headless), the user has authorized as FALLBACK human-like
+  mouse simulation to tick the checkbox — to be implemented only after the test results.
 - Selectors live in one adapter/config module; treated as baseline to verify, never assumed.
 - Live checks are manual, opt-in, in `tests/manual/`. CI uses mock provider only.
 
