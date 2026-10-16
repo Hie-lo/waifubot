@@ -53,6 +53,9 @@ def _init_db(settings: Settings, *, quiet: bool = False) -> None:
     ensure_runtime_dirs(settings)
     os.environ["DB_URL"] = settings.db_url
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    # script_location in alembic.ini is relative; make it absolute so CLI works
+    # from any working directory (editable install / services).
+    cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     command.upgrade(cfg, "head")  # idempotent: safe before every command
     if not quiet:
         print(f"database ready: {settings.db_url}")

@@ -17,6 +17,7 @@ See `SPEC.md` (v3.1) for the full specification and `AGENT.md` for working rules
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .            # install the waifubot package itself (required for `python -m waifubot.cli`)
 cp .env.example .env   # fill in your values
 make migrate           # create the database
 make test              # run the test suite (no network needed)

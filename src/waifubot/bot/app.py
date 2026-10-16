@@ -10,12 +10,15 @@ runs in post_init INSIDE the Application's loop — never in a foreign loop.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import InvalidToken, NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -237,5 +240,22 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
 def run_bot(settings: Settings) -> int:
     """Run polling until interrupted (SPEC §11: polling only — no webhooks)."""
     app, _worker, _bot_app = build_app(settings)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Migration (asyncio.run in alembic env) leaves "no current event loop";
+    # PTB's run_polling needs one on Python 3.10+ (RuntimeError otherwise).
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    try:
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
+    except NetworkError as e:
+        print(f"error [network]: cannot reach Telegram: {e}", file=sys.stderr)
+        return 1
+    except InvalidToken:
+        print(
+            "error [config_error]: BOT_TOKEN was rejected by Telegram "
+            "(valid format, wrong token - check @BotFather)",
+            file=sys.stderr,
+        )
+        return 2
     return 0
