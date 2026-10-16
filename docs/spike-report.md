@@ -6,9 +6,11 @@
 |---|---|---|
 | 2026-10-16 | pre-fix spike (`8e50338`) | 0 images: `Locator.fill` timeout — prompt textarea lives inside `#outputIframeEl` (selector bug; fixed in `d1d4740`) |
 | 2026-10-16 | iframe fix (`d1d4740`, plain `fill()`) | **Blocked by provider** (user report: the run had no human-like behavior). Exact block screen/stage pending from user. |
+| 2026-10-16 | iframe fix + human-paced typing (`e953451`) | Reached the generate step, **blocked again** (user report). User's PoC with its automation profile works on the same machine. |
 
 ### Decision record
 - **2026-10-16 (user):** add human-paced char-by-character typing (40–120 ms, occasional short pauses) and small natural pauses before clicks. SPEC §4 allows forced clicks / char-by-char typing once a controlled test proves they are required — the plain-fill run above is that test. **Still prohibited:** stealth launch flags, CAPTCHA solving, bypass logic, proxy rotation, retries on `blocked_by_provider`. Challenge pages still stop the run and are reported.
+- **2026-10-16 (user, second block):** human-paced typing alone was still blocked at the generate step. The user directed adoption of their working PoC's full automation profile — persistent profile, `slow_mo=100`, `--disable-blink-features=AutomationControlled`, and the canvas extraction fallback. Adopted in the spike (config-driven) and recorded in the AGENT.md amendment log + `docs/provider-permission.md`. CAPTCHA solving, challenge-page bypass, proxy rotation, and retries on `blocked_by_provider` remain prohibited. Risk note: production adoption of this profile is a user-owned provider-terms question (re-verify at monetization phases); if the provider blocks even this profile, treat it as a no-go signal and evaluate the alternative candidate pages (config switch) and the Sprint 2 Selenium comparison.
 
 ## 1. Environment
 - Machine: WSL2 (user's PC)

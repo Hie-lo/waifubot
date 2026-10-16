@@ -26,3 +26,11 @@ user_data_dir: "./user_data"   # persistent browser profile; "" = fresh profile 
 # Human-paced typing (user-approved 2026-10-16). Hard caps in code: max 500 ms/char.
 type_delay_ms_min: 40
 type_delay_ms_max: 120
+
+# Browser automation profile — user decision 2026-10-16: match the user's working
+# PoC (plain automation is blocked at the generate step; this profile works).
+# CAPTCHA solving / challenge bypass / proxy rotation remain prohibited.
+slow_mo_ms: 100
+launch_args:
+  - "--disable-blink-features=AutomationControlled"
+include_canvas_fallback: true   # PoC extraction fallback (canvas->jpeg); spike-only

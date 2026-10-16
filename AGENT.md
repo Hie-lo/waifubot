@@ -23,6 +23,10 @@ Read this file at the start of every session. The full specification is in `SPEC
 - **Scope.** Do not build chat, memory, payments, NSFW, local diffusion models, public multi-user access, or Ollama integration. They are out of scope until the user approves them in writing.
 - **Content safety.** SFW only. Every character must be explicitly adult. Do not weaken, bypass, or make optional the content checks in `SPEC.md` section 8.
 
+## Amendment log
+
+- **2026-10-16 (user decision):** the user's working proof-of-concept automation profile is approved and adopted: persistent browser profile, `slow_mo`, human-paced character-by-character typing with small pauses, and the Chromium argument `--disable-blink-features=AutomationControlled`. Background: controlled Sprint 0 spike runs without this profile were blocked by the provider at the generate step (plain `fill()` first, then human-paced typing alone), while the user's PoC with this profile generates successfully on the same machine; the user explicitly directed the agent to use that code. This exception is limited to that automation profile. Solving CAPTCHAs, bypassing challenge or access-denied pages, proxy rotation, and extra retries on `blocked_by_provider` remain prohibited. Recorded in `docs/provider-permission.md`.
+
 ## Sprint report template
 
 ```text

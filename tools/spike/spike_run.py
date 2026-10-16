@@ -86,6 +86,11 @@ class SpikeConfig:
     # Human-paced typing (user-approved 2026-10-16 after a plain fill() run got blocked)
     type_delay_ms_min: int = 40
     type_delay_ms_max: int = 120
+    # Browser automation profile — user decision 2026-10-16: match the user's working PoC
+    # (which generates successfully; plain automation is blocked at the generate step).
+    slow_mo_ms: int = 100
+    launch_args: list[str] = field(default_factory=list)
+    include_canvas_fallback: bool = True  # PoC extraction fallback; spike-only
 
 
 @dataclass
@@ -116,6 +121,11 @@ def load_config(path: str) -> SpikeConfig:
     # Human-pacing hard caps: never slower than 500 ms per character ("not too slow").
     cfg.type_delay_ms_min = int(min(max(10, cfg.type_delay_ms_min), 300))
     cfg.type_delay_ms_max = int(min(max(cfg.type_delay_ms_min, cfg.type_delay_ms_max), 500))
+    # Browser profile hard cap: slow_mo at most 2 s per action.
+    cfg.slow_mo_ms = int(min(max(0, cfg.slow_mo_ms), 2000))
+    if not isinstance(cfg.launch_args, list):
+        cfg.launch_args = []
+    cfg.launch_args = [str(a) for a in cfg.launch_args]
     return cfg
 
 
@@ -182,8 +192,8 @@ async def human_type(locator, text: str, cfg: SpikeConfig) -> None:
 
     A controlled spike run with plain fill() was blocked by the provider; SPEC §4
     allows character-by-character typing once a controlled test proves it is
-    required. Pacing only — no stealth flags, no automation hiding, no CAPTCHA
-    handling, no bypass.
+    required. Pacing only — no CAPTCHA handling, no challenge bypass, no proxy
+    rotation.
     """
     for ch in text:
         await locator.type(ch)
@@ -195,26 +205,56 @@ async def human_type(locator, text: str, cfg: SpikeConfig) -> None:
 
 
 async def collect_candidates(page, cfg: SpikeConfig) -> list[str]:
-    """Collect direct data: image URLs by scanning ALL frames (PoC §8.1).
+    """Collect image data URLs by scanning ALL frames (user's PoC behavior).
 
-    Only img.src values that start with ``data:image/`` and are longer than
-    5000 chars. No canvas conversion (§8.2).
+    Primary source: direct ``img.src`` data:image/ URLs longer than 5000 chars.
+    Optional fallback (``include_canvas_fallback``, spike-only, from the user's
+    working PoC): non-icon/logo imgs with width>150 and large canvases are
+    re-encoded via canvas to jpeg data URLs. Everything still goes through
+    Pillow validation downstream.
     """
+    js_scan = """
+        () => {
+            const fallback = __CANVAS_FALLBACK__;
+            const out = [];
+            const imgs = Array.from(document.querySelectorAll('img'));
+            for (const img of imgs) {
+                const src = img.src || img.getAttribute('src') || '';
+                if (src.startsWith('data:image/') && src.length > 5000) {
+                    out.push(src);
+                } else if (fallback && src && !src.includes('icon') && !src.includes('logo') && img.width > 150) {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.naturalWidth || img.width || 512;
+                        canvas.height = img.naturalHeight || img.height || 512;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+                        if (dataUrl.length > 5000) {
+                            out.push(dataUrl);
+                        }
+                    } catch (e) {}
+                }
+            }
+            if (fallback) {
+                for (const c of document.querySelectorAll('canvas')) {
+                    try {
+                        if (c.width > 200 && c.height > 200) {
+                            const dataUrl = c.toDataURL('image/jpeg', 0.95);
+                            if (dataUrl && dataUrl.length > 5000) {
+                                out.push(dataUrl);
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+            return out;
+        }
+    """.replace("__CANVAS_FALLBACK__", "true" if cfg.include_canvas_fallback else "false")
     urls: list[str] = []
     for frame in page.frames:
         try:
-            found = await frame.evaluate(
-                """() => {
-                    const out = [];
-                    for (const img of document.querySelectorAll('img')) {
-                        const src = img.src || img.getAttribute('src') || '';
-                        if (src.startsWith('data:image/') && src.length > 5000) {
-                            out.push(src);
-                        }
-                    }
-                    return out;
-                }"""
-            )
+            found = await frame.evaluate(js_scan)
         except Exception:  # noqa: BLE001 — frame may be detached or cross-origin
             continue
         urls.extend(found)
@@ -235,15 +275,23 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
     out_dir = Path(cfg.output_dir) / run_id
 
     async with async_playwright() as pw:
+        # User-approved PoC automation profile (2026-10-16): the provider blocks
+        # plain automation at the generate step; the user's PoC with this profile
+        # generates successfully and the user directed us to use it. CAPTCHA
+        # solving, challenge bypass, and proxy rotation remain prohibited.
+        launch_kwargs: dict[str, Any] = {"headless": cfg.headless}
+        if cfg.slow_mo_ms > 0:
+            launch_kwargs["slow_mo"] = cfg.slow_mo_ms
+        if cfg.launch_args:
+            launch_kwargs["args"] = list(cfg.launch_args)
         browser = None
         if cfg.user_data_dir:
-            # Persistent profile (PoC-style). Plain automation — no stealth args.
             context = await pw.chromium.launch_persistent_context(
-                cfg.user_data_dir, headless=cfg.headless
+                cfg.user_data_dir, **launch_kwargs
             )
             page = context.pages[0] if context.pages else await context.new_page()
         else:
-            browser = await pw.chromium.launch(headless=cfg.headless)
+            browser = await pw.chromium.launch(**launch_kwargs)
             context = await browser.new_context()
             page = await context.new_page()
         try:
@@ -264,6 +312,7 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
             prompt_box = frame.locator(cfg.prompt_textarea)
             await prompt_box.wait_for(state="visible", timeout=30000)
             await prompt_box.click()
+            await asyncio.sleep(0.5)  # PoC timing
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Backspace")
             await human_type(prompt_box, cfg.prompt, cfg)
