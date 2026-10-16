@@ -9,8 +9,6 @@ python-dotenv==1.2.4
 # Provider automation (Sprint 0 spike + Sprint 2 adapter)
 playwright==1.64.0
 
-# Selenium comparison probe (Sprint 2, throwaway tool — optional)
-selenium==4.51.0
 
 # Dev / test
 pytest==9.1.1

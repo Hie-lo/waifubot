@@ -64,9 +64,12 @@ def test_load_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert load_env_file(tmp_path / "missing.env") is False
 
 
-def test_allow_nsfw_hard_gate() -> None:
-    with pytest.raises(ConfigError, match="SFW"):
-        Settings.from_env({**BASE_ENV, "ALLOW_NSFW": "true"})
+def test_allow_nsfw_is_an_admin_switch() -> None:
+    # USER DECISION 2026-10-16: NSFW may be enabled — it is a switch, not an error.
+    s = Settings.from_env({**BASE_ENV, "ALLOW_NSFW": "true"})
+    assert s.allow_nsfw is True
+    s2 = Settings.from_env({**BASE_ENV, "ALLOW_NSFW": "false"})
+    assert s2.allow_nsfw is False
 
 
 def test_images_per_job_hard_max() -> None:

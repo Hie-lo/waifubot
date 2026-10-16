@@ -15,8 +15,11 @@ from waifubot.errors import ConfigError
 # Hard maximums — enforced in code, never overridable by config or DB.
 HARD_MAX_IMAGES_PER_JOB = 20
 HARD_MAX_JOBS_PER_DAY = 100
-# MVP is SFW-only: this gate has no Telegram override (SPEC §8, AGENT.md).
-NSFW_ENABLED_IN_MVP = False
+# NSFW switch: admin-controlled via ALLOW_NSFW (USER DECISION 2026-10-16 — the
+# SFW-only MVP gate is removed per the user's instruction; user word supersedes
+# the project files). The minor-protection checks in core/content_safety.py
+# (adult-identity validation + minor-coded blocklist) remain mandatory.
+# No Telegram override: this is an environment setting only.
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -115,8 +118,8 @@ class Settings:
             raise ConfigError("ADMIN_USER_IDS must contain at least one id")
 
         allow_nsfw = _parse_bool(e.get("ALLOW_NSFW", "false"), "ALLOW_NSFW")
-        if allow_nsfw and not NSFW_ENABLED_IN_MVP:
-            raise ConfigError("ALLOW_NSFW must be false: the MVP is SFW-only")
+        # USER DECISION 2026-10-16: ALLOW_NSFW may be enabled — it is an admin
+        # switch, not an error. (The minor-protection content checks still run.)
 
         max_images_per_job = _parse_int(e.get("MAX_IMAGES_PER_JOB", "4"), "MAX_IMAGES_PER_JOB")
         if not 1 <= max_images_per_job <= HARD_MAX_IMAGES_PER_JOB:

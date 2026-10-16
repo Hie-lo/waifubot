@@ -16,7 +16,9 @@ The Perchance adapter (`perchance_playwright`) is **implemented in Sprint 2**
 (`core/providers/perchance.py`, async Playwright) with the user-approved launch
 profile and human-paced typing (config-driven pacing in `config/providers/perchance.yaml`).
 Live execution happens only through `python -m waifubot.cli live-smoke --confirm-live`.
-The Selenium comparison probe (`tools/spike/selenium_compare.py`, throwaway) covers the
-"test both tools" decision; production stays on async Playwright (already proven live).
+**The spike (`tools/spike/spike_run.py`) delegates its browser flow to this same
+adapter** — one shared, tested code path, no drift (user decision 2026-10-16).
+Selenium is **dropped** (user decision 2026-10-16): the provider's bot checks
+detect Selenium and return bot errors; Playwright async is the single tool.
 The mock provider simulates every outcome observed or feared: `ok`, `partial`,
 `malformed`, `blocked`, `timeout`, `error`, `empty`.

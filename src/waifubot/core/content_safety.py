@@ -1,4 +1,9 @@
-"""Content safety checks (SPEC §8). SFW only; every character explicitly adult.
+"""Content safety checks (SPEC §8, amended by user decision 2026-10-16).
+
+USER DECISION: ALLOW_NSFW is an admin switch — the SFW-only MVP gate is removed.
+What REMAINS mandatory (these protect against minors, not against NSFW):
+every character explicitly adult (adult age + adult features stated in the
+identity) and the minor-coded blocklist on the FINAL prompt.
 
 Human (admin) review is the PRIMARY control. These automated checks reduce
 risk: a text rule cannot make a provider draw an adult, and keyword lists can

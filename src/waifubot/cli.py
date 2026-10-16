@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from waifubot.config import Settings, ensure_runtime_dirs, load_env_file
 from waifubot.core.content_safety import load_blocklist, validate_adult_identity
@@ -43,7 +44,7 @@ BLOCKLIST_PATH = REPO_ROOT / "config" / "blocklist.yaml"
 MOCK_CONFIG_PATH = REPO_ROOT / "config" / "providers" / "mock.yaml"
 
 
-def _init_db(settings: Settings) -> None:
+def _init_db(settings: Settings, *, quiet: bool = False) -> None:
     from alembic.config import Config
 
     from alembic import command
@@ -51,8 +52,9 @@ def _init_db(settings: Settings) -> None:
     ensure_runtime_dirs(settings)
     os.environ["DB_URL"] = settings.db_url
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
-    command.upgrade(cfg, "head")
-    print(f"database ready: {settings.db_url}")
+    command.upgrade(cfg, "head")  # idempotent: safe before every command
+    if not quiet:
+        print(f"database ready: {settings.db_url}")
 
 
 def _load_stack(settings: Settings):  # noqa: ANN202
@@ -280,8 +282,10 @@ def main(argv: list[str] | None = None) -> int:
         # The dev CLI does not need Telegram secrets; the Sprint 3 bot will
         # require them (require_secrets=True).
         settings = Settings.from_env(require_secrets=False)
+        # Every DB-using command gets migrations applied first (idempotent) —
+        # this prevents "no such table" on a fresh checkout (user bug 2026-10-16).
+        _init_db(settings, quiet=(args.command != "init-db"))
         if args.command == "init-db":
-            _init_db(settings)
             return 0
         if args.command == "add-character":
             return asyncio.run(_add_character(settings, args))
@@ -292,6 +296,13 @@ def main(argv: list[str] | None = None) -> int:
     except WaifuBotError as e:
         print(f"error [{e.code}]: {e}", file=sys.stderr)
         return 2
+    except SQLAlchemyError as e:
+        print(
+            f"database error: {type(e).__name__}. "
+            "Try: PYTHONPATH=src python3 -m waifubot.cli init-db",
+            file=sys.stderr,
+        )
+        return 3
     return 1
 
 

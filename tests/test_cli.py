@@ -143,3 +143,23 @@ def test_cli_works_without_telegram_secrets(tmp_path: Path) -> None:
     )
     assert gen.returncode == 0, gen.stderr + gen.stdout
     assert "status=succeeded" in gen.stdout
+
+
+def test_cli_auto_migrates_without_init_db(tmp_path: Path) -> None:
+    """Regression: 'no such table: settings' (user bug 2026-10-16) — the CLI
+    must apply migrations automatically before DB commands."""
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT / "src"),
+        "DB_URL": f"sqlite+aiosqlite:///{tmp_path / 'auto.db'}",
+        "STORAGE_ROOT": str(tmp_path / "storage"),
+        "ALLOW_NSFW": "true",  # the admin switch must be accepted (user decision)
+    }
+    # NOTE: no init-db call at all
+    gen = subprocess.run(
+        [sys.executable, "-m", "waifubot.cli", "mock-generate",
+         "--identity", ADULT, "--count", "1", "--seed", "7"],
+        capture_output=True, text=True, env=env, cwd=REPO_ROOT, timeout=120,
+    )
+    assert gen.returncode == 0, gen.stderr + gen.stdout
+    assert "status=succeeded" in gen.stdout

@@ -44,6 +44,15 @@ Living document — updated every sprint.
   user's machine) — now `load_env_file()` loads `<repo>/.env` at startup, and the dev CLI no
   longer requires Telegram secrets at all (the Sprint 3 bot will). Selenium probe repaired
   (textarea clear + ActionChains hover) to mirror the working PoC. 115 tests passing.
+- **User decisions (2026-10-16, supersede project files):** (1) user instruction > project
+  documents on every conflict — recorded as the top amendment in AGENT.md; (2) `ALLOW_NSFW`
+  is an admin switch and may be enabled — the SFW-only gate is removed (minor-protection
+  checks remain); (3) Selenium is DROPPED (provider bot-checks detect it — user live
+  experience) — Playwright async is the single automation tool, and `tools/spike/spike_run.py`
+  now delegates its browser flow to the shared `PerchanceProvider` (exact tested code);
+  (4) the CLI auto-applies migrations (fixes `no such table: settings`).
+  Conflicts reported to the user; remaining hard lines (minor protections, no CAPTCHA
+  solving / proxies / auto-retries on blocks) were listed for the user to override if desired.
 
 ## Confirmed for Sprint 3 (Telegram admin bot)
 - `/settings` must expose ALL admin-tunable values including art style (`default_style` key →

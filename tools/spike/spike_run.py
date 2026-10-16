@@ -1,29 +1,26 @@
-"""Sprint 0 — controlled live provider spike (MANUAL, OPT-IN).
+"""Sprint 0 — controlled live provider spike (MANUAL, OPT-IN). THROWAWAY script.
 
-THROWAWAY script. Not application code. Run ONLY after the user approves Sprint 0.
-Before running, tell the user a browser will open and a real generation request
-will be submitted.
+The browser flow is DELEGATED to the product adapter
+(`src/waifubot/core/providers/perchance.py`) — the exact code path used by
+`python -m waifubot.cli live-smoke`. This tool only adds: multiple runs with
+spacing, metrics CSV, and its own validation/saving under storage/spike_out.
 
 Usage (on the user's WSL2 machine):
     python tools/spike/spike_run.py --config tools/spike/spike_config.example.yaml --confirm-live
 
 Safety:
 - Refuses to run without --confirm-live.
-- Stops on CAPTCHA / challenge / rate-limit / access-denied pages.
-- Bounded: count, timeout, spacing, max images per run are config values with hard caps.
-- Does NOT retry on blocked_by_provider.
+- Stops on CAPTCHA / challenge / rate-limit / access-denied (blocked_by_provider).
+- Bounded: count, timeout, spacing are config values with hard caps.
 - Records metrics to a CSV; never logs cookies/tokens/Base64.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import csv
 import hashlib
 import os
-import random
-import re
 import sys
 import time
 import uuid
@@ -32,6 +29,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
 try:
     import yaml  # type: ignore
 except Exception as e:  # noqa: BLE001
@@ -39,9 +38,10 @@ except Exception as e:  # noqa: BLE001
     sys.exit(2)
 
 try:
-    from playwright.async_api import async_playwright  # type: ignore
+    from waifubot.core.image_provider import STATUS_BLOCKED, GenerationRequest
+    from waifubot.core.providers.perchance import PerchanceProvider
 except Exception as e:  # noqa: BLE001
-    print(f"Playwright required: {e}", file=sys.stderr)
+    print(f"waifubot package required (run from the repo): {e}", file=sys.stderr)
     sys.exit(2)
 
 try:
@@ -53,15 +53,6 @@ except Exception as e:  # noqa: BLE001
 HARD_MAX_COUNT = 10
 HARD_MAX_TIMEOUT_S = 300
 HARD_MAX_IMAGES = 20
-BLOCKED_MARKERS = (
-    "captcha",
-    "challenge",
-    "access denied",
-    "rate limit",
-    "too many requests",
-    "verify you are human",
-    "unusual traffic",
-)
 
 
 @dataclass
@@ -87,7 +78,6 @@ class SpikeConfig:
     type_delay_ms_min: int = 40
     type_delay_ms_max: int = 120
     # Browser automation profile — user decision 2026-10-16: match the user's working PoC
-    # (which generates successfully; plain automation is blocked at the generate step).
     slow_mo_ms: int = 100
     launch_args: list[str] = field(default_factory=list)
     include_canvas_fallback: bool = True  # PoC extraction fallback; spike-only
@@ -118,10 +108,8 @@ def load_config(path: str) -> SpikeConfig:
         cfg.poll_interval_s = 1.0
     if cfg.spacing_s < 0:
         cfg.spacing_s = 0
-    # Human-pacing hard caps: never slower than 500 ms per character ("not too slow").
     cfg.type_delay_ms_min = int(min(max(10, cfg.type_delay_ms_min), 300))
     cfg.type_delay_ms_max = int(min(max(cfg.type_delay_ms_min, cfg.type_delay_ms_max), 500))
-    # Browser profile hard cap: slow_mo at most 2 s per action.
     cfg.slow_mo_ms = int(min(max(0, cfg.slow_mo_ms), 2000))
     if not isinstance(cfg.launch_args, list):
         cfg.launch_args = []
@@ -129,27 +117,35 @@ def load_config(path: str) -> SpikeConfig:
     return cfg
 
 
-def is_blocked(text: str, url: str) -> str | None:
-    low = (text + " " + url).lower()
-    for m in BLOCKED_MARKERS:
-        if m in low:
-            return m
-    return None
-
-
-def parse_data_url(data_url: str) -> tuple[str, bytes] | None:
-    m = re.match(r"^data:([^;,]+)(;base64)?,(.*)$", data_url, re.DOTALL)
-    if not m:
-        return None
-    mime = m.group(1).strip().lower()
-    b64 = m.group(3)
-    try:
-        raw = base64.b64decode(b64, validate=True)
-    except Exception:  # noqa: BLE001
-        return None
-    if not raw:
-        return None
-    return mime, raw
+def provider_config(cfg: SpikeConfig) -> dict[str, Any]:
+    """Map the spike config onto the product adapter config (one shared flow)."""
+    return {
+        "name": "perchance_playwright",
+        "page_url": cfg.page_url,
+        "output_iframe": cfg.output_iframe,
+        "selectors": {
+            "prompt_textarea": cfg.prompt_textarea,
+            "style_select": cfg.style_select,
+            "generate_button": cfg.generate_button,
+        },
+        "style_values": {},
+        "launch": {
+            "headless": cfg.headless,
+            "slow_mo_ms": cfg.slow_mo_ms,
+            "user_data_dir": cfg.user_data_dir,
+            "args": list(cfg.launch_args),
+            "human_pacing": {
+                "type_delay_ms_min": cfg.type_delay_ms_min,
+                "type_delay_ms_max": cfg.type_delay_ms_max,
+            },
+        },
+        "limits": {
+            "timeout_s": cfg.timeout_s,
+            "poll_interval_s": cfg.poll_interval_s,
+            "min_data_url_chars": 5000,
+            "include_canvas_fallback": cfg.include_canvas_fallback,
+        },
+    }
 
 
 def validate_image(raw: bytes, mime: str, cfg: SpikeConfig) -> dict[str, Any] | None:
@@ -187,217 +183,58 @@ def atomic_save(raw: bytes, out_dir: Path, fmt: str) -> str:
     return str(final)
 
 
-async def human_type(locator, text: str, cfg: SpikeConfig) -> None:
-    """Type text char-by-char with human-like pacing (user-approved 2026-10-16).
-
-    A controlled spike run with plain fill() was blocked by the provider; SPEC §4
-    allows character-by-character typing once a controlled test proves it is
-    required. Pacing only — no CAPTCHA handling, no challenge bypass, no proxy
-    rotation.
-    """
-    for ch in text:
-        await locator.type(ch)
-        delay = random.uniform(cfg.type_delay_ms_min, cfg.type_delay_ms_max) / 1000.0
-        if random.random() < 0.10:
-            # Occasional short "thinking" pause (bounded).
-            delay += random.uniform(0.25, 0.6)
-        await asyncio.sleep(delay)
-
-
-async def collect_candidates(page, cfg: SpikeConfig) -> list[str]:
-    """Collect image data URLs by scanning ALL frames (user's PoC behavior).
-
-    Primary source: direct ``img.src`` data:image/ URLs longer than 5000 chars.
-    Optional fallback (``include_canvas_fallback``, spike-only, from the user's
-    working PoC): non-icon/logo imgs with width>150 and large canvases are
-    re-encoded via canvas to jpeg data URLs. Everything still goes through
-    Pillow validation downstream.
-    """
-    js_scan = """
-        () => {
-            const fallback = __CANVAS_FALLBACK__;
-            const out = [];
-            const imgs = Array.from(document.querySelectorAll('img'));
-            for (const img of imgs) {
-                const src = img.src || img.getAttribute('src') || '';
-                if (src.startsWith('data:image/') && src.length > 5000) {
-                    out.push(src);
-                } else if (fallback && src && !src.includes('icon') && !src.includes('logo') && img.width > 150) {
-                    try {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.naturalWidth || img.width || 512;
-                        canvas.height = img.naturalHeight || img.height || 512;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-                        if (dataUrl.length > 5000) {
-                            out.push(dataUrl);
-                        }
-                    } catch (e) {}
-                }
-            }
-            if (fallback) {
-                for (const c of document.querySelectorAll('canvas')) {
-                    try {
-                        if (c.width > 200 && c.height > 200) {
-                            const dataUrl = c.toDataURL('image/jpeg', 0.95);
-                            if (dataUrl && dataUrl.length > 5000) {
-                                out.push(dataUrl);
-                            }
-                        }
-                    } catch (e) {}
-                }
-            }
-            return out;
-        }
-    """.replace("__CANVAS_FALLBACK__", "true" if cfg.include_canvas_fallback else "false")
-    urls: list[str] = []
-    for frame in page.frames:
-        try:
-            found = await frame.evaluate(js_scan)
-        except Exception:  # noqa: BLE001 — frame may be detached or cross-origin
-            continue
-        urls.extend(found)
-    # De-dup preserving order
-    seen: set[str] = set()
-    out: list[str] = []
-    for u in urls:
-        if u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
-
-
 async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
     run_id = f"run-{run_index:02d}-{uuid.uuid4().hex[:6]}"
     metrics = RunMetrics(run_id=run_id, started_at=datetime.now(UTC).isoformat())
     t0 = time.monotonic()
     out_dir = Path(cfg.output_dir) / run_id
 
-    async with async_playwright() as pw:
-        # User-approved PoC automation profile (2026-10-16): the provider blocks
-        # plain automation at the generate step; the user's PoC with this profile
-        # generates successfully and the user directed us to use it. CAPTCHA
-        # solving, challenge bypass, and proxy rotation remain prohibited.
-        launch_kwargs: dict[str, Any] = {"headless": cfg.headless}
-        if cfg.slow_mo_ms > 0:
-            launch_kwargs["slow_mo"] = cfg.slow_mo_ms
-        if cfg.launch_args:
-            launch_kwargs["args"] = list(cfg.launch_args)
-        browser = None
-        if cfg.user_data_dir:
-            context = await pw.chromium.launch_persistent_context(
-                cfg.user_data_dir, **launch_kwargs
+    provider = PerchanceProvider(provider_config(cfg))
+    try:
+        result = await provider.generate(
+            GenerationRequest(
+                prompt=cfg.prompt,
+                count=cfg.count,
+                style_value=cfg.style_value,
+                timeout_s=float(cfg.timeout_s),
             )
-            page = context.pages[0] if context.pages else await context.new_page()
-        else:
-            browser = await pw.chromium.launch(**launch_kwargs)
-            context = await browser.new_context()
-            page = await context.new_page()
+        )
+    except Exception as e:  # noqa: BLE001
+        metrics.errors.append(f"exception:{type(e).__name__}:{str(e)[:200]}")
+        return _finish(metrics, t0)
+    finally:
+        await provider.close()
+
+    metrics.candidates_found = len(result.candidates)
+    if result.status == STATUS_BLOCKED:
+        metrics.blocked = True
+        metrics.blocked_reason = result.error_summary or "blocked"
+        metrics.errors.append(f"blocked:{result.error_summary or ''}")
+        return _finish(metrics, t0)
+    if result.error_code:
+        metrics.errors.append(f"{result.error_code}:{result.error_summary or ''}")
+    for note in result.notes:
+        metrics.errors.append(note)
+
+    seen: set[str] = set()
+    for cand in result.candidates:
+        info = validate_image(cand.data, cand.claimed_mime, cfg)
+        if not info:
+            metrics.errors.append("candidate_rejected_by_validation")
+            continue
+        digest = hashlib.sha256(cand.data).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
         try:
-            await page.goto(cfg.page_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(5000)  # let the output iframe settle (PoC)
-
-            # Blocked check (initial)
-            body_text = await page.inner_text("body")
-            reason = is_blocked(body_text, page.url)
-            if reason:
-                metrics.blocked = True
-                metrics.blocked_reason = reason
-                metrics.errors.append(f"blocked_on_load:{reason}")
-                return _finish(metrics, t0)
-
-            # Interactions live inside the output iframe (PoC §8.1)
-            frame = page.frame_locator(cfg.output_iframe)
-            prompt_box = frame.locator(cfg.prompt_textarea)
-            await prompt_box.wait_for(state="visible", timeout=30000)
-            await prompt_box.click()
-            await asyncio.sleep(0.5)  # PoC timing
-            await page.keyboard.press("Control+A")
-            await page.keyboard.press("Backspace")
-            await human_type(prompt_box, cfg.prompt, cfg)
-            print("prompt filled")
-            await asyncio.sleep(random.uniform(0.3, 0.8))  # brief natural pause
-
-            if cfg.style_value and cfg.style_select:
-                # Print the page's real option values (ground truth; no invention).
-                try:
-                    options = await frame.locator(cfg.style_select).evaluate(
-                        "(el) => Array.from(el.options)"
-                        ".map(o => ({value: o.value, label: (o.textContent || '').trim()}))"
-                    )
-                    print(f"style options: {options}")
-                except Exception as e:  # noqa: BLE001
-                    metrics.errors.append(f"style_options_failed:{type(e).__name__}")
-                try:
-                    await frame.locator(cfg.style_select).select_option(
-                        value=cfg.style_value, timeout=10000
-                    )
-                    print("style selected")
-                except Exception as e:  # noqa: BLE001
-                    metrics.errors.append(f"style_select_failed:{type(e).__name__}")
-
-            gen = frame.locator(cfg.generate_button)
-            await gen.hover()
-            await asyncio.sleep(random.uniform(0.5, 1.2))  # pause before clicking
-            await gen.click(force=True, timeout=30000)
-            print("generate clicked")
-
-            # Poll
-            deadline = time.monotonic() + cfg.timeout_s
-            collected_hashes: set[str] = set()
-            while time.monotonic() < deadline:
-                await asyncio.sleep(cfg.poll_interval_s)
-                body_text = await page.inner_text("body")
-                reason = is_blocked(body_text, page.url)
-                if reason:
-                    metrics.blocked = True
-                    metrics.blocked_reason = reason
-                    metrics.errors.append(f"blocked_during_poll:{reason}")
-                    return _finish(metrics, t0)
-
-                cands = await collect_candidates(page, cfg)
-                metrics.candidates_found = max(metrics.candidates_found, len(cands))
-
-                for du in cands:
-                    parsed = parse_data_url(du)
-                    if not parsed:
-                        continue
-                    mime, raw = parsed
-                    info = validate_image(raw, mime, cfg)
-                    if not info:
-                        continue
-                    h = hashlib.sha256(raw).hexdigest()
-                    if h in collected_hashes:
-                        continue
-                    collected_hashes.add(h)
-                    try:
-                        saved = atomic_save(raw, out_dir, info["format"])
-                        metrics.saved_files.append(saved)
-                        metrics.valid_images = len(metrics.saved_files)
-                    except Exception as e:  # noqa: BLE001
-                        metrics.errors.append(f"save_failed:{type(e).__name__}")
-
-                if metrics.valid_images >= cfg.count:
-                    break
-
-            if metrics.valid_images < cfg.count:
-                metrics.errors.append(f"insufficient_images:{metrics.valid_images}/{cfg.count}")
-
+            saved = atomic_save(cand.data, out_dir, info["format"])
+            metrics.saved_files.append(saved)
+            metrics.valid_images = len(metrics.saved_files)
         except Exception as e:  # noqa: BLE001
-            metrics.errors.append(f"exception:{type(e).__name__}:{str(e)[:200]}")
-        finally:
-            try:
-                await context.close()
-            except Exception:  # noqa: BLE001
-                pass
-            # With a persistent context, context.close() is enough (§9.4).
-            if browser is not None:
-                try:
-                    await browser.close()
-                except Exception:  # noqa: BLE001
-                    pass
+            metrics.errors.append(f"save_failed:{type(e).__name__}")
 
+    if metrics.valid_images < cfg.count:
+        metrics.errors.append(f"insufficient_images:{metrics.valid_images}/{cfg.count}")
     return _finish(metrics, t0)
 
 
@@ -415,6 +252,7 @@ async def main_async(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     print(f"[spike] page_url={cfg.page_url} headless={cfg.headless} count={cfg.count} timeout={cfg.timeout_s}s spacing={cfg.spacing_s}s")
     print("[spike] WARNING: a browser will open and a real generation request will be submitted.")
+    print("[spike] browser flow: shared product adapter (PerchanceProvider) — the tested code path")
 
     metrics_list: list[RunMetrics] = []
     runs = min(max(1, args.runs), HARD_MAX_COUNT)
