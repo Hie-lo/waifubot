@@ -22,3 +22,7 @@ output_iframe: "#outputIframeEl"
 style_value: "ref:optionKeyName:Soft Anime"
 prompt: "masterpiece, anime girl, blue hair, smiling, high quality"
 user_data_dir: "./user_data"   # persistent browser profile; "" = fresh profile each run
+
+# Human-paced typing (user-approved 2026-10-16). Hard caps in code: max 500 ms/char.
+type_delay_ms_min: 40
+type_delay_ms_max: 120

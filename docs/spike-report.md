@@ -1,5 +1,15 @@
 # Sprint 0 — Spike Report (to be filled)
 
+## 0. Live run log (chronological)
+
+| Date | Build | Result |
+|---|---|---|
+| 2026-10-16 | pre-fix spike (`8e50338`) | 0 images: `Locator.fill` timeout — prompt textarea lives inside `#outputIframeEl` (selector bug; fixed in `d1d4740`) |
+| 2026-10-16 | iframe fix (`d1d4740`, plain `fill()`) | **Blocked by provider** (user report: the run had no human-like behavior). Exact block screen/stage pending from user. |
+
+### Decision record
+- **2026-10-16 (user):** add human-paced char-by-character typing (40–120 ms, occasional short pauses) and small natural pauses before clicks. SPEC §4 allows forced clicks / char-by-char typing once a controlled test proves they are required — the plain-fill run above is that test. **Still prohibited:** stealth launch flags, CAPTCHA solving, bypass logic, proxy rotation, retries on `blocked_by_provider`. Challenge pages still stop the run and are reported.
+
 ## 1. Environment
 - Machine: WSL2 (user's PC)
 - Python version:

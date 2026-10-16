@@ -6,7 +6,7 @@
 
 - **Provider candidate (baseline):** `https://perchance.org/ai-text-to-image-generator` (configurable; can be switched to another page/provider later without code changes).
 - **Other candidate pages (comparison only if baseline fails):** `https://perchance.org/vision-lab-studio`, `https://perchance.org/ai-character-generator`, `https://perchance.org`.
-- **Automation method:** browser automation (Playwright async first; Selenium as fallback if needed), plain fill/click, no stealth/bypass.
+- **Automation method:** browser automation (Playwright async first; Selenium as fallback if needed). Plain fill/click first; on 2026-10-16 a controlled spike run with plain `fill()` was blocked by the provider, and the user then explicitly approved human-paced char-by-character typing with small natural pauses before clicks (this is the SPEC §4 "controlled test proves required" case). Still no stealth flags, no bypass, no CAPTCHA solving, no proxy rotation.
 - **Mode:** visible window first (WSLg); headless only if separately tested and permitted.
 - **Rate:** to be measured in Sprint 0; conservative default spacing between runs (starting default: 30 s). Hard maximums in config.
 - **Public posting:** user states ownership/rights are theirs and posting to public/private channels is permitted. (Agent note: this is a user assertion, not a verified document; if monetization is added later, re-verify A7.)

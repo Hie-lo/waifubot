@@ -6,7 +6,7 @@ See `SPEC.md` (v3.1) for the full specification and `AGENT.md` for working rules
 
 ## Status
 
-- Sprint 0 (provider feasibility spike): in progress — spike scripts and permission doc prepared; live runs must be executed on the user's WSL2 machine.
+- Sprint 0 (provider feasibility spike): in progress — first live run hit a selector bug (fixed); a plain-fill re-run was blocked by the provider; human-paced typing added (user-approved, 2026-10-16); re-run pending on the user's WSL2 machine.
 - No application code yet.
 
 ## Setup (target: WSL2, Python 3.11)

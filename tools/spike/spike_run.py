@@ -22,6 +22,7 @@ import base64
 import csv
 import hashlib
 import os
+import random
 import re
 import sys
 import time
@@ -82,6 +83,9 @@ class SpikeConfig:
     style_value: str = ""
     prompt: str = "a friendly anime girl, soft lighting"
     user_data_dir: str = ""  # persistent browser profile; "" = fresh profile each run
+    # Human-paced typing (user-approved 2026-10-16 after a plain fill() run got blocked)
+    type_delay_ms_min: int = 40
+    type_delay_ms_max: int = 120
 
 
 @dataclass
@@ -109,6 +113,9 @@ def load_config(path: str) -> SpikeConfig:
         cfg.poll_interval_s = 1.0
     if cfg.spacing_s < 0:
         cfg.spacing_s = 0
+    # Human-pacing hard caps: never slower than 500 ms per character ("not too slow").
+    cfg.type_delay_ms_min = int(min(max(10, cfg.type_delay_ms_min), 300))
+    cfg.type_delay_ms_max = int(min(max(cfg.type_delay_ms_min, cfg.type_delay_ms_max), 500))
     return cfg
 
 
@@ -168,6 +175,23 @@ def atomic_save(raw: bytes, out_dir: Path, fmt: str) -> str:
         os.fsync(f.fileno())
     os.replace(part, final)
     return str(final)
+
+
+async def human_type(locator, text: str, cfg: SpikeConfig) -> None:
+    """Type text char-by-char with human-like pacing (user-approved 2026-10-16).
+
+    A controlled spike run with plain fill() was blocked by the provider; SPEC §4
+    allows character-by-character typing once a controlled test proves it is
+    required. Pacing only — no stealth flags, no automation hiding, no CAPTCHA
+    handling, no bypass.
+    """
+    for ch in text:
+        await locator.type(ch)
+        delay = random.uniform(cfg.type_delay_ms_min, cfg.type_delay_ms_max) / 1000.0
+        if random.random() < 0.10:
+            # Occasional short "thinking" pause (bounded).
+            delay += random.uniform(0.25, 0.6)
+        await asyncio.sleep(delay)
 
 
 async def collect_candidates(page, cfg: SpikeConfig) -> list[str]:
@@ -242,8 +266,9 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
             await prompt_box.click()
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Backspace")
-            await prompt_box.fill(cfg.prompt)
+            await human_type(prompt_box, cfg.prompt, cfg)
             print("prompt filled")
+            await asyncio.sleep(random.uniform(0.3, 0.8))  # brief natural pause
 
             if cfg.style_value and cfg.style_select:
                 try:
@@ -253,7 +278,10 @@ async def run_one(cfg: SpikeConfig, run_index: int) -> RunMetrics:
                 except Exception as e:  # noqa: BLE001
                     metrics.errors.append(f"style_select_failed:{type(e).__name__}")
 
-            await frame.locator(cfg.generate_button).click(force=True, timeout=30000)
+            gen = frame.locator(cfg.generate_button)
+            await gen.hover()
+            await asyncio.sleep(random.uniform(0.5, 1.2))  # pause before clicking
+            await gen.click(force=True, timeout=30000)
             print("generate clicked")
 
             # Poll
