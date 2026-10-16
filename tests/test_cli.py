@@ -172,6 +172,10 @@ def test_set_setting_and_show_settings(tmp_path: Path) -> None:
         "PYTHONPATH": str(REPO_ROOT / "src"),
         "DB_URL": f"sqlite+aiosqlite:///{tmp_path / 'set.db'}",
         "STORAGE_ROOT": str(tmp_path / "storage"),
+        # SPEC §4: the env maximum IS the hard limit the DB can never override.
+        # Raise the operator cap so 50 is inside it; 9999 must still be refused.
+        "MAX_JOBS_PER_DAY": "100",
+        "MAX_IMAGES_PER_JOB": "20",
     }
     for key in ("BOT_TOKEN", "ADMIN_USER_IDS", "DESTINATION_CHAT_ID"):
         env.pop(key, None)

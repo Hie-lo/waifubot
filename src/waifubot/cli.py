@@ -91,7 +91,7 @@ async def _add_character(settings: Settings, args: argparse.Namespace) -> int:
 
 
 async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
-    from waifubot.core.admin_settings import AdminSettings
+    from waifubot.core.admin_settings import AdminHardLimits, AdminSettings
 
     builder, pipeline, blocklist = _load_stack(settings)
     provider_cfg = load_provider_config(MOCK_CONFIG_PATH)
@@ -104,7 +104,9 @@ async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
         factory = make_session_factory(engine)
         # Runtime-changeable caps (user rule 2026-10-16): stored bot setting >
         # env default > code default; hard limits clamp inside the service.
-        admin = AdminSettings(factory)
+        admin = AdminSettings(factory, hard=AdminHardLimits(
+            max_images_per_job=settings.max_images_per_job,
+            max_jobs_per_day=settings.max_jobs_per_day))
         max_images = await admin.get_or("images_per_job", settings.max_images_per_job)
         max_jobs = await admin.get_or("daily_cap", settings.max_jobs_per_day)
         async with factory() as session:
@@ -187,9 +189,12 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
     provider = create_provider(provider_cfg)
 
     # Style: admin setting -> provider style mapping (never invented).
-    from waifubot.core.admin_settings import AdminSettings
+    from waifubot.core.admin_settings import AdminHardLimits, AdminSettings
 
-    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)))
+    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)),
+                          hard=AdminHardLimits(
+                              max_images_per_job=settings.max_images_per_job,
+                              max_jobs_per_day=settings.max_jobs_per_day))
     style_key = args.style or await admin.get("default_style")
     style_values = provider_cfg.get("style_values", {}) or {}
     if style_key not in style_values:
@@ -261,9 +266,12 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
 
 async def _set_setting(settings: Settings, args: argparse.Namespace) -> int:
     """Change a runtime setting (user rule 2026-10-16: changeable options)."""
-    from waifubot.core.admin_settings import AdminSettings
+    from waifubot.core.admin_settings import AdminHardLimits, AdminSettings
 
-    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)))
+    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)),
+                          hard=AdminHardLimits(
+                              max_images_per_job=settings.max_images_per_job,
+                              max_jobs_per_day=settings.max_jobs_per_day))
     try:
         value: object = json.loads(args.value)
     except (ValueError, TypeError):
@@ -275,9 +283,12 @@ async def _set_setting(settings: Settings, args: argparse.Namespace) -> int:
 
 
 async def _show_settings(settings: Settings, args: argparse.Namespace) -> int:  # noqa: ARG001
-    from waifubot.core.admin_settings import AdminSettings
+    from waifubot.core.admin_settings import AdminHardLimits, AdminSettings
 
-    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)))
+    admin = AdminSettings(make_session_factory(make_engine(settings.db_url)),
+                          hard=AdminHardLimits(
+                              max_images_per_job=settings.max_images_per_job,
+                              max_jobs_per_day=settings.max_jobs_per_day))
     values = await admin.all_settings()
     for key in sorted(values):
         print(f"{key} = {values[key]!r}")

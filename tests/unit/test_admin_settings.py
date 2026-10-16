@@ -121,3 +121,19 @@ def test_get_or_prefers_stored_value_then_fallback(settings: AdminSettings) -> N
             await settings.get_or("images_per_job", 9999)
 
     _run(body())
+
+
+def test_all_settings_survives_corrupt_row(settings: AdminSettings) -> None:
+    """Review fix 2026-10-16: /settings must never break on a corrupt stored row."""
+
+    async def body() -> None:
+        from waifubot.db.models import Setting
+
+        async with settings._sessions() as s:  # noqa: SLF001
+            s.add(Setting(key="daily_cap", value_json="{not json"))
+            await s.commit()
+        out = await settings.all_settings()
+        assert out["daily_cap"] == 20  # spec default — resilient read
+        assert out["images_per_job"] == 4
+
+    _run(body())

@@ -150,5 +150,10 @@ class AdminSettings:
             for spec in SETTINGS_SPECS:
                 row = await s.get(Setting, spec.key)
                 if row is not None:
-                    out[spec.key] = self.validate(spec.key, json.loads(row.value_json))
+                    # Resilient read (same contract as get()): a corrupt row
+                    # must never break /settings — fall back to the default.
+                    try:
+                        out[spec.key] = self.validate(spec.key, json.loads(row.value_json))
+                    except (ConfigError, TypeError, ValueError):
+                        pass
         return out

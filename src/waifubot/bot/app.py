@@ -32,7 +32,7 @@ from waifubot.bot.messages import Messages
 from waifubot.bot.recovery import startup_recover
 from waifubot.bot.worker import GenerationWorker
 from waifubot.config import Settings, ensure_runtime_dirs
-from waifubot.core.admin_settings import AdminSettings
+from waifubot.core.admin_settings import AdminHardLimits, AdminSettings
 from waifubot.core.content_safety import load_blocklist
 from waifubot.core.image_pipeline import ImagePipeline
 from waifubot.core.prompt_builder import PromptBuilder
@@ -158,7 +158,13 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
     msgs = Messages(REPO_ROOT / "locales", os.environ.get("LANGUAGE", "fa"))
     gate = AdminGate(settings.admin_user_ids)
     memory = DialogMemory(sessions)
-    admin_settings = AdminSettings(sessions)
+    admin_settings = AdminSettings(
+        sessions,
+        hard=AdminHardLimits(
+            max_images_per_job=settings.max_images_per_job,
+            max_jobs_per_day=settings.max_jobs_per_day,
+        ),
+    )
 
     gateway = PTBGateway()
     worker = GenerationWorker(
