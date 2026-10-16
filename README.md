@@ -47,6 +47,7 @@ PYTHONPATH=src python3 -m waifubot.cli live-smoke --confirm-live --runs 3
 - Images are validated and stored as `pending_review` like any real job. Migrations are applied automatically — no `init-db` needed first.
 - The browser flow is literally the tested code: the spike (`tools/spike/spike_run.py`) and this command share `PerchanceProvider`.
 - `--headless` runs WITHOUT a browser window (test this!); a window opens ONLY if a challenge needs your approval — you tick it, the window closes and the work continues headless. `--headed` forces a visible window.
+- **Windowless by default:** with `xvfb` installed (`sudo apt install -y xvfb`, once), jobs run a REAL browser on an invisible display — zero windows on the desktop and no Cloudflare challenge (it trusts real windowed browsers). Last resort is one small, genuinely-minimized window (never on top).
 - Runtime settings (changeable today, no code change): `python -m waifubot.cli set-setting daily_cap 50`, `set-setting images_per_job 4`, `set-setting default_style anime` … and `show-settings` to list them. Env (`MAX_JOBS_PER_DAY`, `MAX_IMAGES_PER_JOB`) is the default until a setting is stored.
 
 ## Safety
