@@ -40,6 +40,10 @@ Living document — updated every sprint.
   `daily_cap`, `posting_interval_s`, `retention_days` — code-defined type/range/default; DB
   values can never exceed env hard limits. Sprint 3 `/settings` will expose all of them.
 - Tests: 112 passing (no network/browser), ruff clean. Live path is manual-only (user machine).
+- **Bugfix (2026-10-16, user-reported):** the CLI never loaded `.env` (BOT_TOKEN error on the
+  user's machine) — now `load_env_file()` loads `<repo>/.env` at startup, and the dev CLI no
+  longer requires Telegram secrets at all (the Sprint 3 bot will). Selenium probe repaired
+  (textarea clear + ActionChains hover) to mirror the working PoC. 115 tests passing.
 
 ## Confirmed for Sprint 3 (Telegram admin bot)
 - `/settings` must expose ALL admin-tunable values including art style (`default_style` key →

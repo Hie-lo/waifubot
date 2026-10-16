@@ -59,6 +59,19 @@ def _require(env: Mapping[str, str], name: str) -> str:
     return value
 
 
+def load_env_file(path: Path) -> bool:
+    """Load a .env file into the process environment (existing vars win).
+
+    Returns True if the file was loaded. Secrets live only in .env — never in Git.
+    """
+    if not path.is_file():
+        return False
+    from dotenv import load_dotenv
+
+    load_dotenv(path, override=False)
+    return True
+
+
 @dataclass(frozen=True)
 class Settings:
     bot_token: str = field(repr=False, default="")
@@ -77,14 +90,29 @@ class Settings:
     log_level: str = "INFO"
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
+    def from_env(
+        cls, env: Mapping[str, str] | None = None, *, require_secrets: bool = True
+    ) -> Settings:
+        """Load settings from the environment.
+
+        ``require_secrets=True`` (the Telegram bot): BOT_TOKEN, ADMIN_USER_IDS and
+        DESTINATION_CHAT_ID must be present. ``False`` (the dev CLI): they may be
+        empty — provider/mock commands do not need Telegram secrets. Any value
+        that IS present is still strictly validated.
+        """
         e: Mapping[str, str] = os.environ if env is None else env
 
-        bot_token = _require(e, "BOT_TOKEN")
-        admin_user_ids = _parse_admin_ids(_require(e, "ADMIN_USER_IDS"))
-        if not admin_user_ids:
+        if require_secrets:
+            bot_token = _require(e, "BOT_TOKEN")
+            admin_user_ids = _parse_admin_ids(_require(e, "ADMIN_USER_IDS"))
+            destination_chat_id = _require(e, "DESTINATION_CHAT_ID")
+        else:
+            bot_token = (e.get("BOT_TOKEN") or "").strip()
+            raw_ids = (e.get("ADMIN_USER_IDS") or "").strip()
+            admin_user_ids = _parse_admin_ids(raw_ids) if raw_ids else ()
+            destination_chat_id = (e.get("DESTINATION_CHAT_ID") or "").strip()
+        if require_secrets and not admin_user_ids:
             raise ConfigError("ADMIN_USER_IDS must contain at least one id")
-        destination_chat_id = _require(e, "DESTINATION_CHAT_ID")
 
         allow_nsfw = _parse_bool(e.get("ALLOW_NSFW", "false"), "ALLOW_NSFW")
         if allow_nsfw and not NSFW_ENABLED_IN_MVP:

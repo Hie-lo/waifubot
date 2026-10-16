@@ -4,6 +4,10 @@ async Playwright (src/waifubot/core/providers/perchance.py); this probe only
 answers "does the same page work under Selenium with the same selectors and the
 user-approved launch profile?".
 
+The interaction sequence mirrors the WORKING PoC/spike (2026-10-16): persistent
+profile, approved launch args, clear-then-type with human pacing, hover + pause
+before the generate click, frame scan for data: images.
+
 Requires: pip install selenium  (Selenium Manager fetches chromedriver).
 
 Usage (on the user's WSL2 machine only):
@@ -35,11 +39,30 @@ BLOCKED_MARKERS = (
 
 
 def detect_block(text: str, url: str) -> str | None:
-    low = f"{text} {url}".lower()
+    low = f"{text} {url}".lower().replace("-", " ").replace("_", " ")
     for marker in BLOCKED_MARKERS:
         if marker in low:
             return marker
     return None
+
+
+def human_type(element, text: str) -> None:
+    """Type char-by-char with human pacing (same policy as the adapter)."""
+    for ch in text:
+        element.send_keys(ch)
+        time.sleep(random.uniform(0.04, 0.12))
+
+
+def clear_prompt(driver, prompt) -> None:
+    """Robustly clear the textarea (click, select-all, backspace, verify)."""
+    prompt.click()
+    time.sleep(0.5)
+    prompt.send_keys("\ue009" + "a")  # Ctrl+A (selenium Keys.CONTROL alias)
+    prompt.send_keys("\ue003")  # Backspace
+    if prompt.get_attribute("value"):
+        prompt.clear()  # fallback: selenium built-in clear
+    if prompt.get_attribute("value"):
+        driver.execute_script("arguments[0].value = '';", prompt)  # last resort
 
 
 def main() -> int:
@@ -63,8 +86,8 @@ def main() -> int:
 
     try:
         from selenium import webdriver
+        from selenium.webdriver.common.action_chains import ActionChains
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.support.ui import Select, WebDriverWait
     except ImportError as e:
@@ -85,7 +108,7 @@ def main() -> int:
     t0 = time.monotonic()
     try:
         driver.get(page_url)
-        time.sleep(5)
+        time.sleep(5)  # settle (same as the working PoC)
         reason = detect_block(driver.find_element(By.TAG_NAME, "body").text, driver.current_url)
         if reason:
             print(f"[selenium-compare] BLOCKED on load: {reason} (blocked_by_provider)")
@@ -93,26 +116,31 @@ def main() -> int:
 
         wait = WebDriverWait(driver, 30)
         wait.until(EC.frame_to_be_available_and_switch_to_it((By.CSS_SELECTOR, iframe)))
-        prompt = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, selectors["prompt_textarea"])))
-        prompt.click()
-        time.sleep(0.5)
-        prompt.send_keys(Keys.CONTROL + "a")
-        prompt.send_keys(Keys.BACKSPACE)
-        for ch in args.prompt:  # human-paced typing (same policy as the adapter)
-            prompt.send_keys(ch)
-            time.sleep(random.uniform(0.04, 0.12))
-        print("[selenium-compare] prompt typed")
+        prompt = wait.until(
+            EC.visibility_of_element_located((By.CSS_SELECTOR, selectors["prompt_textarea"]))
+        )
+
+        clear_prompt(driver, prompt)
+        human_type(prompt, args.prompt)
+        if not prompt.get_attribute("value"):
+            print("[selenium-compare] ERROR: prompt field is empty after typing")
+            return 1
+        print("[selenium-compare] prompt typed (old draft cleared)")
 
         try:
             Select(driver.find_element(By.CSS_SELECTOR, selectors["style_select"])).select_by_value(
                 (cfg.get("style_values") or {}).get("anime", "")
             )
+            print("[selenium-compare] style selected")
         except Exception:  # noqa: BLE001
             print("[selenium-compare] style select skipped")
 
         btn = driver.find_element(By.CSS_SELECTOR, selectors["generate_button"])
-        driver.execute_script("arguments[0].hover();", btn)
-        time.sleep(random.uniform(0.5, 1.2))
+        # Hover + pause, then click — same behavior as the working PoC.
+        try:
+            ActionChains(driver).move_to_element(btn).pause(random.uniform(0.5, 1.2)).perform()
+        except Exception:  # noqa: BLE001
+            time.sleep(0.5)
         driver.execute_script("arguments[0].click();", btn)
         print("[selenium-compare] generate clicked — polling for images...")
 
@@ -120,20 +148,18 @@ def main() -> int:
         seen: set[str] = set()
         while time.monotonic() < deadline:
             time.sleep(4)
-            for handle in driver.window_handles:
-                driver.switch_to.window(handle)
             try:
                 driver.switch_to.default_content()
                 driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, iframe))
             except Exception:  # noqa: BLE001
                 pass
-            srcs = driver.find_elements(By.CSS_SELECTOR, "img")
-            for img in srcs:
+            for img in driver.find_elements(By.CSS_SELECTOR, "img"):
                 src = img.get_attribute("src") or ""
-                if src.startswith("data:image/") and len(src) > 5000 and src not in seen:
+                if src.startswith("data:image/") and len(src) > 5000:
                     seen.add(src)
-            body = driver.find_element(By.TAG_NAME, "body").text
-            reason = detect_block(body, driver.current_url)
+            reason = detect_block(
+                driver.find_element(By.TAG_NAME, "body").text, driver.current_url
+            )
             if reason:
                 print(f"[selenium-compare] BLOCKED during poll: {reason} (blocked_by_provider)")
                 return 1
@@ -141,9 +167,15 @@ def main() -> int:
             if len(seen) >= 4:
                 break
 
-        print(f"[selenium-compare] DONE images={len(seen)} elapsed={round(time.monotonic()-t0, 1)}s")
+        print(
+            f"[selenium-compare] DONE images={len(seen)} "
+            f"elapsed={round(time.monotonic() - t0, 1)}s"
+        )
         print("[selenium-compare] compare with the Playwright adapter results, then decide.")
         return 0 if seen else 1
+    except Exception as e:  # noqa: BLE001 — clean error instead of a raw traceback
+        print(f"[selenium-compare] ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
     finally:
         driver.quit()
 

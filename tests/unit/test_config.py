@@ -10,6 +10,7 @@ from waifubot.config import (
     HARD_MAX_JOBS_PER_DAY,
     Settings,
     ensure_runtime_dirs,
+    load_env_file,
 )
 from waifubot.errors import ConfigError
 
@@ -35,6 +36,32 @@ def test_missing_required_fails(missing: str) -> None:
     env = {k: v for k, v in BASE_ENV.items() if k != missing}
     with pytest.raises(ConfigError):
         Settings.from_env(env)
+
+
+def test_cli_mode_tolerates_missing_secrets() -> None:
+    s = Settings.from_env({}, require_secrets=False)
+    assert s.bot_token == ""
+    assert s.admin_user_ids == ()
+    assert s.destination_chat_id == ""
+    # ...but present values are still validated
+    with pytest.raises(ConfigError, match="boolean"):
+        Settings.from_env({"ALLOW_NSFW": "maybe"}, require_secrets=False)
+
+
+def test_load_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "BOT_TOKEN=123:from-dotenv\nADMIN_USER_IDS=42\nDESTINATION_CHAT_ID=-1001\n"
+        "MAX_IMAGES_PER_JOB=3\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("BOT_TOKEN", raising=False)
+    monkeypatch.delenv("MAX_IMAGES_PER_JOB", raising=False)
+    assert load_env_file(env_file) is True
+    s = Settings.from_env()
+    assert s.bot_token == "123:from-dotenv"
+    assert s.max_images_per_job == 3
+    assert load_env_file(tmp_path / "missing.env") is False
 
 
 def test_allow_nsfw_hard_gate() -> None:

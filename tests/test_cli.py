@@ -119,3 +119,27 @@ def test_cli_live_smoke_refuses_without_confirm(tmp_path: Path) -> None:
     r = _cli(tmp_path, "live-smoke", "--runs", "1")
     assert r.returncode == 2
     assert "refusing to run without --confirm-live" in r.stderr
+
+
+def test_cli_works_without_telegram_secrets(tmp_path: Path) -> None:
+    """Regression: the dev CLI must not require BOT_TOKEN (user bug 2026-10-16)."""
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT / "src"),
+        "DB_URL": f"sqlite+aiosqlite:///{tmp_path / 'n.db'}",
+        "STORAGE_ROOT": str(tmp_path / "storage"),
+    }
+    for key in ("BOT_TOKEN", "ADMIN_USER_IDS", "DESTINATION_CHAT_ID"):
+        env.pop(key, None)
+    init = subprocess.run(
+        [sys.executable, "-m", "waifubot.cli", "init-db"],
+        capture_output=True, text=True, env=env, cwd=REPO_ROOT, timeout=120,
+    )
+    assert init.returncode == 0, init.stderr
+    gen = subprocess.run(
+        [sys.executable, "-m", "waifubot.cli", "mock-generate",
+         "--identity", ADULT, "--count", "1", "--seed", "7"],
+        capture_output=True, text=True, env=env, cwd=REPO_ROOT, timeout=120,
+    )
+    assert gen.returncode == 0, gen.stderr + gen.stdout
+    assert "status=succeeded" in gen.stdout

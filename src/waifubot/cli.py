@@ -22,7 +22,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from waifubot.config import Settings, ensure_runtime_dirs
+from waifubot.config import Settings, ensure_runtime_dirs, load_env_file
 from waifubot.core.content_safety import load_blocklist, validate_adult_identity
 from waifubot.core.image_pipeline import ImagePipeline
 from waifubot.core.prompt_builder import PromptBuilder
@@ -275,7 +275,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        settings = Settings.from_env()
+        # Load .env from the repo root (secrets stay in .env — never in Git).
+        load_env_file(REPO_ROOT / ".env")
+        # The dev CLI does not need Telegram secrets; the Sprint 3 bot will
+        # require them (require_secrets=True).
+        settings = Settings.from_env(require_secrets=False)
         if args.command == "init-db":
             _init_db(settings)
             return 0
