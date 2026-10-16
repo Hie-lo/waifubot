@@ -1,14 +1,98 @@
-# Persian (fa) UI strings — Sprint 1a skeleton. Every user-visible string lives
-# here (SPEC §11). Logs stay in English.
+# Persian (fa) UI strings — SPEC §11: every user-visible string lives here.
+# Logs stay in English. Startup fails on missing keys (see waifubot.locale).
 app_name: "WaifuBot"
-welcome: "به WaifuBot خوش آمدید!"
-help: "برای شروع از /generate استفاده کنید. راهنما: /status و /inbox و /pool."
-status: "وضعیت: {state}"
-error_generic: "خطایی رخ داد. دوباره تلاش کنید."
+welcome: "به WaifuBot خوش آمدید! من دستیار مدیریت تصاویر شما هستم."
+help: |
+  دستورها:
+  /generate — ساخت تصویر (ویزارد گام‌به‌گام)
+  /inbox — بررسی تصاویر تازه (تأیید / رد / ذخیره شخصیت)
+  /queue — صف تولید
+  /pool — تصاویر تأییدشدهٔ منتشرنشده
+  /publish — انتشار فوری به کانال
+  /characters — فهرست شخصیت‌ها
+  /settings — تنظیمات
+  /status — وضعیت سیستم
+  /pause — توقف تولید
+  /resume — ادامهٔ تولید
 not_authorized: "شما دسترسی ندارید."
+error_generic: "خطایی رخ داد. دوباره تلاش کنید."
+status: "وضعیت: {state}"
+published: "در کانال منتشر شد."
 generating: "در حال تولید تصویر... لطفاً صبر کنید."
 generation_done: "تولید تمام شد. {count} تصویر آماده بررسی است."
-review_approve: "تأیید"
-review_reject: "رد"
-save_character: "ذخیره شخصیت"
-published: "در کانال منتشر شد."
+generation_failed: "تولید ناموفق بود: {error}"
+
+status_running: "وضعیت: در حال اجرا ✅"
+status_paused: "وضعیت: متوقف ⏸ (با /resume ادامه دهید)"
+status_queue: "صف: {pending} در انتظار · {running} در حال اجرا · {failed} ناموفق"
+status_counts: "امروز: {jobs} تولید · {posts} انتشار · دیسک آزاد: {disk}"
+status_last_errors: "آخرین خطاها: {errors}"
+status_none: "بدون خطا"
+
+wiz_style_ask: "استایل تصویر را انتخاب کنید:"
+wiz_character_ask: "شخصیت را انتخاب کنید (یا «شخصیت یک‌باره»):"
+wiz_character_oneoff: "🆕 شخصیت یک‌باره"
+wiz_identity_ask: "متن هویت را بفرستید (مثلاً: adult woman, 25 years old, blue hair):"
+wiz_count_ask: "تعداد تصاویر را انتخاب کنید:"
+wiz_confirm_ask: "تأیید می‌کنید؟"
+wiz_confirm_yes: "✅ بله، بساز"
+wiz_cancel: "✖ انصراف"
+wiz_cancelled: "لغو شد."
+wiz_created: "درخواست ثبت شد: job #{job_id} — وقتی آماده شد در /inbox اطلاع می‌دهم."
+wiz_random: "🎲 تصادفی"
+wiz_stale: "این گفتگو منقضی شده؛ دوباره /generate بزنید."
+
+inbox_empty: "📭 تصویر جدیدی برای بررسی نیست."
+inbox_item: "تصویر #{image_id} (job #{job_id})"
+review_approve: "✅ تأیید"
+review_reject: "❌ رد"
+save_character: "💾 ذخیره شخصیت"
+review_approved: "تصویر #{image_id} تأیید شد و به /pool رفت."
+review_rejected: "تصویر #{image_id} رد شد."
+review_stale: "این مورد دیگر در انتظار بررسی نیست."
+
+savec_name_ask: "نام شخصیت را بفرستید:"
+savec_identity_ask: "متن هویت پیشنهادی را تأیید یا ویرایش کنید:"
+savec_saved: "شخصیت «{name}» (نسخه {version}) ذخیره شد."
+savec_cancelled: "ذخیرهٔ شخصیت لغو شد."
+savec_invalid: "متن هویت نامعتبر است: {error}"
+
+pool_empty: "🏞 استخر خالی است (تصویر تأییدشدهٔ منتشرنشده نداریم)."
+pool_item: "تصویر #{image_id} — {status}"
+publish_pick: "کدام تصویر منتشر شود؟"
+publish_done: "تصویر #{image_id} در کانال منتشر شد (پیام #{message_id})."
+publish_failed: "انتشار ناموفق: {error} — تصویر در استخر ماند."
+publish_unknown: "نتیجهٔ ارسال نامشخص است (تایم‌اوت). آیا پیام واقعاً ارسال شد؟"
+publish_unknown_sent: "✅ ارسال شد"
+publish_unknown_not: "✖ ارسال نشد"
+publish_resolved_sent: "به‌عنوان ارسال‌شده ثبت شد."
+publish_resolved_not: "به‌عنوان ارسال‌نشده ثبت شد؛ دوباره در صف است."
+publish_already: "این تصویر قبلاً ارسال شده است."
+publish_stale: "این مورد دیگر معتبر نیست."
+publish_too_large: "فایل از محدودیت تلگرام بزرگ‌تر است ({size} بایت)."
+
+settings_title: "⚙️ تنظیمات (برای تغییر، کلید را بزنید):"
+settings_item: "{key} = {value}"
+settings_ask_value: "مقدار جدید «{key}» را بفرستید:"
+settings_saved: "«{key}» = {value} ذخیره شد."
+settings_invalid: "مقدار نامعتبر: {error}"
+settings_stale: "این گفتگو منقضی شده؛ دوباره /settings بزنید."
+
+paused: "⏸ تولید متوقف شد."
+resumed: "▶️ تولید ادامه یافت."
+
+characters_empty: "هنوز شخصیتی ثبت نشده."
+characters_item: "• {name} (نسخه {version}) — {identity}"
+
+queue_empty: "صف خالی است."
+queue_item: "job #{job_id} · {status} · تلاش {attempt}/{max} · {error}"
+
+post_caption: "✨ {name}"
+delete_ask: "مطمئنید؟ این عملیات فایل را هم حذف می‌کند."
+delete_yes: "🗑 بله، حذف کن"
+delete_done: "حذف شد."
+delete_stale: "این مورد دیگر معتبر نیست."
+
+disk_low: "⚠️ فضای دیسک کم است ({free} آزاد). تولید متوقف شد."
+breaker_tripped: "⚠️ {count} خطای پیاپی تولید؛ تولید خودکار متوقف شد. با /resume ادامه دهید."
+interrupted_notice: "job #{job_id} در اجرای قبلی قطع شد (error_code=interrupted)."

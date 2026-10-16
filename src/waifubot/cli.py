@@ -341,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                                    "daily_cap, posting_interval_s, retention_days")
     p_set.add_argument("value", help="new value (number or text)")
     sub.add_parser("show-settings", help="print current runtime settings")
+    sub.add_parser("run-bot", help="run the Telegram admin bot (needs BOT_TOKEN etc.)")
 
     args = parser.parse_args(argv)
     try:
@@ -364,6 +365,11 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_set_setting(settings, args))
         if args.command == "show-settings":
             return asyncio.run(_show_settings(settings, args))
+        if args.command == "run-bot":
+            # The bot requires full Telegram secrets (the dev CLI above does not).
+            from waifubot.bot.app import run_bot
+
+            return run_bot(Settings.from_env(require_secrets=True))
     except WaifuBotError as e:
         print(f"error [{e.code}]: {e}", file=sys.stderr)
         return 2

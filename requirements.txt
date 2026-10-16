@@ -9,6 +9,8 @@ python-dotenv==1.2.4
 # Provider automation (Sprint 0 spike + Sprint 2 adapter)
 playwright==1.64.0
 
+# Telegram admin bot (Sprint 3)
+python-telegram-bot==21.10
 
 # Dev / test
 pytest==9.1.1

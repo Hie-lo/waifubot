@@ -1,0 +1,97 @@
+# English (en) UI strings — same key set as fa.yaml (startup checks both).
+app_name: "WaifuBot"
+welcome: "Welcome to WaifuBot! I manage your image pipeline."
+help: |
+  Commands:
+  /generate — generate images (step-by-step wizard)
+  /inbox — review new images (approve / reject / save character)
+  /queue — generation queue
+  /pool — approved, unpublished images
+  /publish — publish to the channel now
+  /characters — list characters
+  /settings — settings
+  /status — system status
+  /pause — pause generation
+  /resume — resume generation
+not_authorized: "You are not authorized."
+error_generic: "Something went wrong. Please try again."
+status: "Status: {state}"
+published: "Published to the channel."
+generating: "Generating images... please wait."
+generation_done: "Done. {count} image(s) ready for review."
+generation_failed: "Generation failed: {error}"
+
+status_running: "Status: running ✅"
+status_paused: "Status: paused ⏸ (use /resume)"
+status_queue: "Queue: {pending} pending · {running} running · {failed} failed"
+status_counts: "Today: {jobs} jobs · {posts} posts · free disk: {disk}"
+status_last_errors: "Last errors: {errors}"
+status_none: "No errors"
+
+wiz_style_ask: "Choose an art style:"
+wiz_character_ask: "Choose a character (or a one-off):"
+wiz_character_oneoff: "🆕 One-off character"
+wiz_identity_ask: "Send the identity text (e.g.: adult woman, 25 years old, blue hair):"
+wiz_count_ask: "How many images?"
+wiz_confirm_ask: "Confirm?"
+wiz_confirm_yes: "✅ Yes, generate"
+wiz_cancel: "✖ Cancel"
+wiz_cancelled: "Cancelled."
+wiz_created: "Queued: job #{job_id} — I will show it in /inbox when ready."
+wiz_random: "🎲 Random"
+wiz_stale: "This dialog expired; run /generate again."
+
+inbox_empty: "📭 Nothing to review."
+inbox_item: "Image #{image_id} (job #{job_id})"
+review_approve: "✅ Approve"
+review_reject: "❌ Reject"
+save_character: "💾 Save character"
+review_approved: "Image #{image_id} approved and moved to /pool."
+review_rejected: "Image #{image_id} rejected."
+review_stale: "This item is no longer awaiting review."
+
+savec_name_ask: "Send the character name:"
+savec_identity_ask: "Confirm or edit the proposed identity text:"
+savec_saved: "Character “{name}” (version {version}) saved."
+savec_cancelled: "Save character cancelled."
+savec_invalid: "Invalid identity text: {error}"
+
+pool_empty: "🏞 Pool is empty (no approved unpublished images)."
+pool_item: "Image #{image_id} — {status}"
+publish_pick: "Which image should be published?"
+publish_done: "Image #{image_id} published (message #{message_id})."
+publish_failed: "Publish failed: {error} — the image stayed in the pool."
+publish_unknown: "Send outcome is unknown (timeout). Was the message actually sent?"
+publish_unknown_sent: "✅ It was sent"
+publish_unknown_not: "✖ It was not sent"
+publish_resolved_sent: "Recorded as sent."
+publish_resolved_not: "Recorded as not sent; back in the queue."
+publish_already: "This image was already sent."
+publish_stale: "This item is no longer valid."
+publish_too_large: "File exceeds Telegram limits ({size} bytes)."
+
+settings_title: "⚙️ Settings (tap a key to change it):"
+settings_item: "{key} = {value}"
+settings_ask_value: "Send the new value for “{key}”:"
+settings_saved: "“{key}” = {value} saved."
+settings_invalid: "Invalid value: {error}"
+settings_stale: "This dialog expired; run /settings again."
+
+paused: "⏸ Generation paused."
+resumed: "▶️ Generation resumed."
+
+characters_empty: "No characters yet."
+characters_item: "• {name} (v{version}) — {identity}"
+
+queue_empty: "Queue is empty."
+queue_item: "job #{job_id} · {status} · attempt {attempt}/{max} · {error}"
+
+post_caption: "✨ {name}"
+delete_ask: "Are you sure? This also deletes the file."
+delete_yes: "🗑 Yes, delete"
+delete_done: "Deleted."
+delete_stale: "This item is no longer valid."
+
+disk_low: "⚠️ Low disk space ({free} free). Generation paused."
+breaker_tripped: "⚠️ {count} consecutive generation failures; auto-generation paused. Use /resume."
+interrupted_notice: "job #{job_id} was interrupted on restart (error_code=interrupted)."
