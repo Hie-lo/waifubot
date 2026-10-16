@@ -90,3 +90,11 @@ Living document — updated every sprint.
 
 ## Next: Sprint 3 — Telegram admin bot, manual flow
 Waiting for explicit user approval.
+- **Headless test round 2 (2026-10-16):** the approval flow worked (job succeeded, 3 images)
+  but the window opened twice "pointlessly" — the Cloudflare interstitial clears BY ITSELF in
+  a real window (no checkbox appears). Policy fixed per user UX rules: ONE window per batch
+  (the browser persists across jobs — close+reopen just re-challenges), starts minimized
+  (`--start-minimized`, never on top / never steals focus), closes at batch end; no
+  close-then-retry-headless anymore. `headless: true` is the default. Headless alone is still
+  tried first every batch (it currently gets challenged every time); human-like checkbox
+  automation stays the authorized LAST fallback only if a real checkbox blocks unattended work.

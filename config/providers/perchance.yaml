@@ -21,7 +21,12 @@ style_values:
 # User-approved automation profile (AGENT.md amendment log, 2026-10-16).
 # CAPTCHA solving / challenge bypass / proxy rotation remain prohibited.
 launch:
-  headless: false
+  # Default: NO window (user UX rule 2026-10-16). A window opens only when a
+  # Cloudflare challenge needs a real browser, starts MINIMIZED (never on top,
+  # never steals focus), works underneath, and closes when the batch ends.
+  # `--headed` on live-smoke overrides this for debugging.
+  headless: true
+  open_minimized: true
   # Full Chromium build (new headless mode) — Playwright's default headless uses a
   # stripped "headless shell" that pages detect and serve a degraded UI to
   # (user test 2026-10-16: textarea never appeared in the shell). channel:"chromium"

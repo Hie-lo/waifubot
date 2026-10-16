@@ -176,7 +176,6 @@ class PerchanceProvider:
         self._pacing = clamp_pacing(cfg.get("launch", {}) or {})
         self._headless_default = bool((cfg.get("launch", {}) or {}).get("headless", False))
         self._headless_state: bool = self._headless_default
-        self._visible_fallback = False
         self._context: Any = None
         self._browser: Any = None
         self._pw: Any = None
@@ -191,9 +190,14 @@ class PerchanceProvider:
         slow_mo = int(launch_cfg.get("slow_mo_ms", 100))
         if slow_mo > 0:
             kwargs["slow_mo"] = min(slow_mo, 2000)
-        args = launch_cfg.get("args") or []
+        args = [str(a) for a in (launch_cfg.get("args") or [])]
+        # User UX rule 2026-10-16: a visible window must never steal focus or sit
+        # on top — start it minimized (best-effort) and let it work underneath.
+        if not self._headless_state and bool(launch_cfg.get("open_minimized", True)):
+            if "--start-minimized" not in args:
+                args.append("--start-minimized")
         if args:
-            kwargs["args"] = [str(a) for a in args]
+            kwargs["args"] = args
         channel = str(launch_cfg.get("channel", "") or "")
         if channel:
             kwargs["channel"] = channel
@@ -252,21 +256,24 @@ class PerchanceProvider:
             await asyncio.sleep(delay)
 
     async def _resolve_challenge(self, page: Any, notes: list[str], where: str) -> str:
-        """A challenge/block page appeared. USER DECISION 2026-10-16 flow:
-        - headless runs: reopen a VISIBLE window (same profile) so the operator
-          can tick the challenge; after approval the window closes and the work
-          continues headless.
-        - visible runs: wait for the operator in the open window.
+        """A challenge page appeared. USER UX RULES 2026-10-16:
+        - headless runs: open ONE background (minimized, never on-top) window with the
+          same profile. The Cloudflare interstitial usually clears BY ITSELF in a real
+          window; a checkbox is ticked by the human only if one actually appears.
+          The window STAYS until the batch ends (close+retry-headless just re-challenges
+          and pops the window twice — learned in the live test), then closes.
+        - visible runs: wait in the existing window.
         The automation NEVER solves or bypasses the challenge (prohibition).
-        Returns "restart" (operator approved — rerun the flow) or "blocked"."""
+        Returns "restart" (page cleared — rerun the flow) or "blocked"."""
         budget = self._limits["challenge_wait_s"]
         if budget <= 0:
             return "blocked"
         if self._headless_state:
             print(
-                f"[provider] challenge ({where}) — reopening the browser window so a "
-                "HUMAN can tick it (never solved automatically). "
-                f"Waiting up to {budget:.0f}s..."
+                f"[provider] challenge ({where}) — opening one background window for "
+                "the security check (it usually clears by itself; tick a checkbox only "
+                "if one appears). The window works underneath, never on top, and closes "
+                f"when the batch ends. Waiting up to {budget:.0f}s..."
             )
             await self.close()
             self._headless_state = False
@@ -279,30 +286,15 @@ class PerchanceProvider:
                 pass
         else:
             print(
-                f"[provider] challenge ({where}) — waiting up to {budget:.0f}s for a "
-                "HUMAN to approve it in the browser window (never solved automatically)"
+                f"[provider] challenge ({where}) — waiting up to {budget:.0f}s for the "
+                "security check to clear (it usually does by itself)"
             )
         deadline = time.monotonic() + budget
         while time.monotonic() < deadline:
             await asyncio.sleep(5)
             if not await self._blocked_reason(page):
-                notes.append("challenge_approved_by_operator")
-                print("[provider] challenge cleared by operator — continuing")
-                if self._headless_default and not self._headless_state:
-                    if self._visible_fallback:
-                        # Headless was challenged again after approval — the
-                        # clearance does not carry over; keep the window open to
-                        # finish this job visibly (closes when the job ends).
-                        notes.append("window_kept_visible_after_rechallenge")
-                        print(
-                            "[provider] headless was challenged again — keeping the "
-                            "window open to finish this job (it closes afterwards)"
-                        )
-                    else:
-                        # User flow: the window closes again and the work continues headless.
-                        await self.close()
-                        self._headless_state = True
-                        print("[provider] window closed — continuing headless")
+                notes.append("challenge_cleared")
+                print("[provider] challenge cleared — continuing in the same window")
                 return "restart"
         return "blocked"
 
@@ -382,14 +374,13 @@ class PerchanceProvider:
                 notes=tuple(notes),
             )
 
-        self._headless_state = self._headless_default
+        # Keep the browser across generate() calls (user UX rule 2026-10-16):
+        # one background window per batch, fewer challenges; close() ends it.
+        if self._context is None:
+            self._headless_state = self._headless_default
         restarts = 0
         try:
             while True:
-                # After the first operator-approved restart, a second headless
-                # challenge means clearance does not carry to headless — keep the
-                # window open and finish the job visibly (user-authorized fallback).
-                self._visible_fallback = restarts >= 1
                 try:
                     return await self._run_flow(
                         request, notes, finish, allow_escalation=restarts < MAX_CHALLENGE_RESTARTS
@@ -399,14 +390,12 @@ class PerchanceProvider:
                     if restarts > MAX_CHALLENGE_RESTARTS:
                         return finish(
                             STATUS_BLOCKED, [], ERROR_BLOCKED,
-                            "challenge reappeared after operator approval",
+                            "challenge reappeared after it cleared",
                         )
                     notes.append(f"flow_restarted_after_challenge_{restarts}")
         except Exception as e:  # noqa: BLE001
             return finish(STATUS_ERROR, [], ERROR_PROVIDER,
                           f"unexpected provider failure: {type(e).__name__}")
-        finally:
-            await self.close()
 
     async def _run_flow(self, request, notes, finish, *, allow_escalation):  # noqa: ANN001, ANN202
         page = await self._ensure_page()
