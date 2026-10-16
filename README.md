@@ -6,9 +6,10 @@ See `SPEC.md` (v3.1) for the full specification and `AGENT.md` for working rules
 
 ## Status
 
-- Sprint 0 (provider feasibility spike): **done — GO (2026-10-16).** Live generation on the user's WSL2 machine succeeded with the user-approved automation profile (recorded in `docs/spike-report.md` and `docs/provider-permission.md`). Style default: site "Anime" (user decision; "no style" also supported via config).
-- Sprint 1a (foundation): **done (2026-10-16).** Config with hard caps, 5 tables + Alembic baseline, fa locale skeleton, test harness (network blocked). See `docs/progress.md`.
-- Next: Sprint 1b (vertical slice with mock provider) — waiting for explicit approval.
+- Sprint 0 (provider feasibility spike): **done — GO (2026-10-16).** 2/2 successful live runs (8 valid JPEG images, 95–125 s/run) with the user-approved automation profile (`docs/spike-report.md`, `docs/provider-permission.md`). Style default: site "Anime".
+- Sprint 1a (foundation): **done (2026-10-16).** Config with hard caps, 5 tables + Alembic baseline, fa locale skeleton, network-blocked tests.
+- Sprint 1b (vertical slice with mock provider): **done (2026-10-16).** Provider interface + mock provider, deterministic prompt builder + content safety, image validation pipeline, CLI (`init-db`, `add-character`, `mock-generate`). 96 tests passing. See `docs/progress.md`.
+- Next: Sprint 2 (real Playwright provider + Selenium comparison) — waiting for explicit approval.
 
 ## Setup (target: WSL2, Python 3.11)
 
@@ -22,6 +23,15 @@ make inspect-schema    # print the database DDL
 ```
 
 Live provider runs (Sprint 0/2 only, after explicit approval) use `tools/spike/` — see `tools/spike/README.md`. They always require `--confirm-live` and open a real browser.
+
+## CLI (Sprint 1b, dev tool — the admin UI is Telegram in Sprint 3)
+
+```bash
+PYTHONPATH=src python3 -m waifubot.cli init-db
+PYTHONPATH=src python3 -m waifubot.cli add-character --name Aki \
+    --identity "adult woman, 25 years old, long blue hair, red eyes"
+PYTHONPATH=src python3 -m waifubot.cli mock-generate --character Aki --count 4 --seed 42
+```
 
 ## Safety
 

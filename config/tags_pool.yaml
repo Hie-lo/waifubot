@@ -1,0 +1,98 @@
+# Tag pool for the deterministic prompt builder (SPEC §6).
+# Presets are data, not logic. Stable IDs, prompt fragments, optional provider
+# mappings, compatibility lists, optional weights. Malformed YAML fails loudly
+# at startup and never falls back silently.
+version: "1"
+template_version: "prompt-v1"
+
+# Fixed style lock (kept separate from scene variables, position-stable in prompts).
+# User decision 2026-10-16: the site style is "Anime"; the in-prompt style lock
+# works with it (or alone when style_value is "" / "no style").
+style_lock: "anime style, consistent character design"
+
+# Provider-supported quality constraints (fixed, appended last).
+quality_fragment: "masterpiece, best quality, high detail"
+
+# Fixed negative prompt (SPEC: one fixed negative prompt).
+negative_prompt: "lowres, bad anatomy, bad hands, blurry, watermark, text, signature, extra fingers"
+
+categories:
+  pose:
+    - id: pose.standing
+      label: "Standing"
+      fragment: "standing, full body"
+      weight: 2
+    - id: pose.sitting
+      label: "Sitting"
+      fragment: "sitting, relaxed posture"
+    - id: pose.lying
+      label: "Lying"
+      fragment: "lying down"
+    - id: pose.portrait
+      label: "Portrait"
+      fragment: "close-up portrait, upper body"
+      incompatible_with: ["background.cityscape"]
+  expression:
+    - id: expr.smiling
+      label: "Smiling"
+      fragment: "smiling, warm expression"
+      weight: 2
+    - id: expr.serene
+      label: "Serene"
+      fragment: "serene, calm expression"
+    - id: expr.laughing
+      label: "Laughing"
+      fragment: "laughing, joyful"
+    - id: expr.shy
+      label: "Shy"
+      fragment: "shy smile, blushing"
+  outfit:
+    - id: outfit.casual_dress
+      label: "Casual dress"
+      fragment: "casual dress"
+    - id: outfit.hoodie
+      label: "Hoodie"
+      fragment: "oversized hoodie"
+    - id: outfit.evening_gown
+      label: "Evening gown"
+      fragment: "elegant evening gown"
+    - id: outfit.cardigan
+      label: "Cardigan"
+      fragment: "knit cardigan, layered outfit"
+  background:
+    - id: background.cityscape
+      label: "Cityscape"
+      fragment: "city skyline background"
+    - id: background.garden
+      label: "Garden"
+      fragment: "flower garden background"
+    - id: background.room
+      label: "Cozy room"
+      fragment: "cozy room interior"
+    - id: background.starry_sky
+      label: "Starry sky"
+      fragment: "starry night sky background"
+  camera:
+    - id: camera.portrait
+      label: "Portrait framing"
+      fragment: "portrait framing"
+    - id: camera.full_body
+      label: "Full body"
+      fragment: "full body shot"
+    - id: camera.dutch
+      label: "Dutch angle"
+      fragment: "dutch angle"
+  lighting:
+    - id: lighting.soft
+      label: "Soft light"
+      fragment: "soft lighting"
+      weight: 2
+    - id: lighting.neon
+      label: "Neon"
+      fragment: "neon glow"
+    - id: lighting.sunset
+      label: "Sunset"
+      fragment: "sunset lighting"
+    - id: lighting.studio
+      label: "Studio"
+      fragment: "studio lighting"

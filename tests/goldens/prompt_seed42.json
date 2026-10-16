@@ -1,0 +1,14 @@
+{
+  "prompt": "adult woman, 25 years old, long blue hair, red eyes, anime style, consistent character design, lying down, smiling, warm expression, oversized hoodie, city skyline background, dutch angle, sunset lighting, masterpiece, best quality, high detail",
+  "preset_ids": [
+    "pose.lying",
+    "expr.smiling",
+    "outfit.hoodie",
+    "background.cityscape",
+    "camera.dutch",
+    "lighting.sunset"
+  ],
+  "template_version": "prompt-v1",
+  "negative_prompt": "lowres, bad anatomy, bad hands, blurry, watermark, text, signature, extra fingers",
+  "seed": 42
+}

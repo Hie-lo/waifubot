@@ -1,0 +1,33 @@
+# Perchance provider configuration — BASELINE FROM THE USER'S WORKING POC.
+# Selectors and values are proven on the user's machine (Sprint 0), but treated
+# as "verify, never assume" at every adapter change (Sprint 2).
+# Switching providers/pages must be a config change only (SPEC §3).
+name: perchance_playwright
+page_url: "https://perchance.org/ai-text-to-image-generator"
+output_iframe: "#outputIframeEl"
+selectors:
+  prompt_textarea: "textarea[data-name='description']"
+  style_select: "select[data-name='artStyle']"
+  generate_button: "button#generateButtonEl"
+
+# Provider style values (per-provider mapping, SPEC §7). User decision 2026-10-16:
+# "Anime" (not "Soft Anime"); "" = no style (style goes in the prompt instead).
+# The spike prints the page's real option values — verify exact values in Sprint 2.
+style_values:
+  anime: "ref:optionKeyName:Anime"
+  soft_anime: "ref:optionKeyName:Soft Anime"
+  no_style: ""
+
+# User-approved automation profile (AGENT.md amendment log, 2026-10-16).
+# CAPTCHA solving / challenge bypass / proxy rotation remain prohibited.
+launch:
+  headless: false
+  slow_mo_ms: 100
+  user_data_dir: "./user_data"
+  args:
+    - "--disable-blink-features=AutomationControlled"
+
+limits:
+  timeout_s: 240
+  poll_interval_s: 3.0
+  min_data_url_chars: 5000

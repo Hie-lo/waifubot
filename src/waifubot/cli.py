@@ -1,0 +1,184 @@
+"""WaifuBot CLI (Sprint 1b — dev tool; the admin UI is Telegram in Sprint 3).
+
+Commands:
+    init-db        run Alembic migrations (creates the database)
+    add-character  save a character (adult identity validated)
+    mock-generate  create a job and run a mock generation, store validated images
+
+Usage (from the repo root, venv active):
+    PYTHONPATH=src python3 -m waifubot.cli init-db
+    PYTHONPATH=src python3 -m waifubot.cli add-character --name Aki \
+        --identity "adult woman, 25 years old, blue hair"
+    PYTHONPATH=src python3 -m waifubot.cli mock-generate --character Aki --count 4 --seed 42
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+from sqlalchemy import select
+
+from waifubot.config import Settings, ensure_runtime_dirs
+from waifubot.core.content_safety import load_blocklist, validate_adult_identity
+from waifubot.core.image_pipeline import ImagePipeline
+from waifubot.core.prompt_builder import PromptBuilder
+from waifubot.core.providers import create_provider, load_provider_config
+from waifubot.core.tags_pool import load_tags_pool
+from waifubot.db.models import Character
+from waifubot.db.session import make_engine, make_session_factory
+from waifubot.errors import WaifuBotError
+from waifubot.services.generation import run_generation_job
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TAGS_POOL_PATH = REPO_ROOT / "config" / "tags_pool.yaml"
+BLOCKLIST_PATH = REPO_ROOT / "config" / "blocklist.yaml"
+MOCK_CONFIG_PATH = REPO_ROOT / "config" / "providers" / "mock.yaml"
+
+
+def _init_db(settings: Settings) -> None:
+    from alembic.config import Config
+
+    from alembic import command
+
+    ensure_runtime_dirs(settings)
+    os.environ["DB_URL"] = settings.db_url
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    command.upgrade(cfg, "head")
+    print(f"database ready: {settings.db_url}")
+
+
+def _load_stack(settings: Settings):  # noqa: ANN202
+    pool = load_tags_pool(TAGS_POOL_PATH)
+    blocklist = load_blocklist(BLOCKLIST_PATH)
+    builder = PromptBuilder(pool, blocklist)
+    ensure_runtime_dirs(settings)
+    pipeline = ImagePipeline(settings.storage_root)
+    return builder, pipeline, blocklist
+
+
+async def _add_character(settings: Settings, args: argparse.Namespace) -> int:
+    builder, _pipeline, blocklist = _load_stack(settings)
+    validate_adult_identity(args.identity, blocklist)
+    style_lock = args.style_lock or builder.style_lock
+    engine = make_engine(settings.db_url)
+    try:
+        factory = make_session_factory(engine)
+        async with factory() as session:
+            row = Character(
+                name=args.name,
+                identity_prompt=args.identity,
+                style_lock=style_lock,
+                version=1,
+                is_active=True,
+            )
+            session.add(row)
+            await session.commit()
+            print(f"character saved: id={row.id} name={row.name} version={row.version}")
+    finally:
+        await engine.dispose()
+    return 0
+
+
+async def _mock_generate(settings: Settings, args: argparse.Namespace) -> int:
+    builder, pipeline, blocklist = _load_stack(settings)
+    provider_cfg = load_provider_config(MOCK_CONFIG_PATH)
+    if args.mode:
+        provider_cfg = {**provider_cfg, "mode": args.mode}
+    provider = create_provider(provider_cfg)
+
+    engine = make_engine(settings.db_url)
+    try:
+        factory = make_session_factory(engine)
+        async with factory() as session:
+            identity = args.identity
+            style_lock = args.style_lock
+            if args.character:
+                result = await session.execute(
+                    select(Character).where(Character.name == args.character)
+                )
+                row = result.scalars().first()
+                if row is None:
+                    print(f"error: character {args.character!r} not found", file=sys.stderr)
+                    return 1
+                identity = row.identity_prompt
+                style_lock = style_lock or row.style_lock
+            if not identity:
+                print("error: provide --identity or --character", file=sys.stderr)
+                return 1
+
+            job, images, gen_result = await run_generation_job(
+                session,
+                provider=provider,
+                pipeline=pipeline,
+                builder=builder,
+                identity=identity,
+                style_lock=style_lock,
+                count=args.count,
+                seed=args.seed,
+                idempotency_key=args.idempotency_key,
+                requested_by="cli",
+            )
+            await session.commit()
+
+            print(f"job id={job.id} status={job.status}")
+            if job.error_code:
+                print(f"error_code={job.error_code} summary={job.error_summary or ''}")
+            if gen_result is not None:
+                print(f"provider={gen_result.provider} result={gen_result.status} "
+                      f"elapsed={gen_result.elapsed_s}s")
+            print(f"images stored: {len(images)} (pending_review)")
+            for row in images:
+                print(f"  {row.file_path} {row.width}x{row.height} {row.mime_type} "
+                      f"sha256={row.sha256[:12]}...")
+            return 0 if job.status == "succeeded" else 1
+    finally:
+        await provider.close()
+        await engine.dispose()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="waifubot")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init-db", help="run Alembic migrations")
+
+    p_add = sub.add_parser("add-character", help="save a character")
+    p_add.add_argument("--name", required=True)
+    p_add.add_argument(
+        "--identity", required=True, help="fixed identity; must state adult age/features"
+    )
+    p_add.add_argument("--style-lock", default="")
+
+    p_gen = sub.add_parser("mock-generate", help="run a mock generation")
+    p_gen.add_argument("--character", default="", help="saved character name")
+    p_gen.add_argument("--identity", default="", help="one-off identity (or use --character)")
+    p_gen.add_argument("--style-lock", default="")
+    p_gen.add_argument("--count", type=int, default=4)
+    p_gen.add_argument("--seed", type=int, default=None)
+    p_gen.add_argument("--idempotency-key", default=None)
+    p_gen.add_argument(
+        "--mode", default="",
+        help="override mock mode (ok/partial/malformed/blocked/timeout/error/empty)",
+    )
+
+    args = parser.parse_args(argv)
+    try:
+        settings = Settings.from_env()
+        if args.command == "init-db":
+            _init_db(settings)
+            return 0
+        if args.command == "add-character":
+            return asyncio.run(_add_character(settings, args))
+        if args.command == "mock-generate":
+            return asyncio.run(_mock_generate(settings, args))
+    except WaifuBotError as e:
+        print(f"error [{e.code}]: {e}", file=sys.stderr)
+        return 2
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

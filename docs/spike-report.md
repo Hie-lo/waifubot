@@ -42,28 +42,25 @@
 - [x] fixed sleeps / forced clicks / launch flags → forced clicks + pacing + user-approved launch profile are a **user decision** (see §0); production adoption is user-owned
 - [x] hardcoded target count/timeout → config values with hard caps (corrected)
 
-## 4. Controlled runs (spaced, within permitted rate)
+## 4. Controlled runs (spaced, within permitted rate) — from `spike_metrics.csv`
 | Run | elapsed_s | candidates | valid | errors | blocked |
 |---|---|---|---|---|---|
-| pre-fix | 34.82 | 0 | 0 | fill timeout (top-document selector bug) | False |
-| + iframe fix | ? | ? | 0 | blocked at generate (user report) | True |
-| + human typing | ? | ? | 0 | blocked at generate (user report) | True |
-| + PoC profile | ? | ? | >0 (success) | none reported | False |
+| run-01-cfc9aa (pre-fix) | 34.82 | 0 | 0 | fill timeout (top-document selector bug) | False |
+| run-01-7269fd (final profile) | 125.26 | 6 | 4 | none | False |
+| run-01-e4372b (final profile) | 94.56 | 4 | 4 | none | False |
 
-*(? = metrics CSV pending from user.)*
-
-## 5. Measurements
-- Success rate: 1 successful build profile out of 4 attempts (final profile works)
-- Median runtime / Max runtime: pending CSV
-- Valid image count (total): pending CSV
-- Validation errors: pending CSV
-- Peak RAM: pending (A4)
-- Peak disk: pending CSV (`storage/spike_out/run-*/`)
+## 5. Measurements (from `spike_metrics.csv`)
+- Success rate (final profile): 2/2 recorded runs produced the full target (4/4)
+- Median runtime (successful runs): 109.9 s
+- Max runtime: 125.3 s
+- Valid image count (total): **8**
+- Validation errors: none recorded; in run-01-7269fd, 6 candidates → 4 valid (dedupe/validation filtered 2 — pipeline works)
+- Peak RAM / peak disk: pending (A4)
 
 ## 6. Output behavior (A8)
-- Single final result or progressive: **pending observation** (Sprint 2 adapter must handle progressive if seen)
-- Formats observed: pending CSV (Pillow-validated; jpeg/png/webp/gif accepted)
-- Seed returned: not observed by the spike (title-seed deliberately ignored per SPEC)
+- Single final result or progressive: candidates are collected over the polling window (~2 min runs); treat the provider interface as **progressive-capable** (collect until target count or timeout). Exact appearance pattern to observe in Sprint 2.
+- Formats observed: **JPEG** (all 8 saved files `.jpg`, Pillow-validated)
+- Seed returned: not observed (title-seed deliberately ignored per SPEC; store only if genuinely returned)
 - Negative prompts supported: unknown — do not assume (SPEC: no invention)
 
 ## 7. Headless test (only if permitted)

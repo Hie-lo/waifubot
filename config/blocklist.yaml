@@ -1,0 +1,21 @@
+# Minor-coded terms — a match rejects the job with a clear error (SPEC §8).
+# Applied to the FINAL prompt, including any admin-typed text. Human (admin)
+# review remains the primary control; this list only reduces risk. False
+# positives are safe: they reject a job and cost nothing.
+terms:
+  - loli
+  - shota
+  - child
+  - children
+  - kid
+  - kids
+  - toddler
+  - minor
+  - underage
+  - teen
+  - teenager
+  - "young girl"
+  - "little girl"
+  - schoolgirl
+  - "school girl"
+  - childhood
