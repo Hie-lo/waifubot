@@ -359,7 +359,14 @@ class BotApp:
             await self._ask_character(inb)
         elif part == "c":
             char_id = int(data.split(":")[2])
-            if char_id == 0:
+            if char_id == -1:  # random everything (SPEC: unchosen = random)
+                dialog["character_id"] = None
+                dialog["identity"] = ""
+                dialog["step"] = "count"
+                await self._memory.set(inb.user_id, dialog)
+                await self._safe_answer(inb)
+                await self._ask_count(inb)
+            elif char_id == 0:
                 dialog["character_id"] = None
                 dialog["step"] = "identity"
                 await self._memory.set(inb.user_id, dialog)
@@ -380,6 +387,9 @@ class BotApp:
             await self._ask_confirm(inb)
         elif part == "y":
             await self._safe_answer(inb)
+            if dialog.get("step") != "confirm":
+                await self._gw.send_message(inb.chat_id, self._msgs.t("wiz_stale"))
+                return
             await self._confirm_generate(inb, dialog)
 
     async def _ask_character(self, inb: Inbound) -> None:
@@ -392,7 +402,7 @@ class BotApp:
             ).scalars().all()
         rows = [(c.name, f"wiz:c:{c.id}") for c in chars]
         rows.append((self._msgs.t("wiz_character_oneoff"), "wiz:c:0"))
-        rows.append((self._msgs.t("wiz_random"), "wiz:c:0"))
+        rows.append((self._msgs.t("wiz_random"), "wiz:c:-1"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_character_ask"), buttons=_chunk(rows)
         )
@@ -585,7 +595,7 @@ class BotApp:
                 await s.commit()
                 await self._safe_answer(inb, self._msgs.t("publish_stale"))
                 return
-            name = await self._image_name(img)
+            name = await self._image_name(s, img)
             outcome = await publish_image(
                 s,
                 self._gw,
@@ -620,12 +630,11 @@ class BotApp:
                 self._msgs.t("publish_failed", error=outcome.error or "unknown"),
             )
 
-    async def _image_name(self, img: Image) -> str:
-        async with self._sessions() as s:
-            if img.character_id:
-                row = await s.get(Character, img.character_id)
-                if row is not None:
-                    return row.name
+    async def _image_name(self, s: AsyncSession, img: Image) -> str:
+        if img.character_id:
+            row = await s.get(Character, img.character_id)
+            if row is not None:
+                return row.name
         return self._msgs.t("app_name")
 
     async def _cb_resolve(self, inb: Inbound, data: str) -> None:
@@ -638,7 +647,7 @@ class BotApp:
                 return
             await resolve_unknown_send(
                 s, post=post, was_sent=(choice == "y"),
-                message_id=inb.update_id or None,
+                message_id=None,  # real id unknowable after the timeout
             )
             await s.commit()
         await self._safe_answer(inb)

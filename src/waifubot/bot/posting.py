@@ -61,6 +61,9 @@ async def publish_image(
     if existing is not None and existing.status == "sent":
         return PublishOutcome(status="already", post=existing,
                               message_id=existing.telegram_message_id)
+    if existing is not None and existing.status == "unknown":
+        # NEVER auto-resend an ambiguous send: the human resolves it (res: buttons).
+        return PublishOutcome(status="unknown", post=existing)
     post = existing or Post(
         image_id=image.id, chat_id=str(chat_id), status="pending", attempt_count=0
     )

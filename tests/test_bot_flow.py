@@ -271,3 +271,46 @@ def test_restart_preserves_state(env: Env) -> None:
     env.build()  # "restart": a new app over the same database file
     dialog = _run(env.memory.get(ADMIN_ID))
     assert dialog is not None and dialog.get("step") == "character"
+
+
+def test_review_fixes_regression(env: Env) -> None:
+    """Bugs found in the Sprint 3 review pass must never come back."""
+
+    async def body() -> None:
+
+        # 1) stale wiz:y mid-wizard must NOT create a job
+        await env.app.handle_message(env.msg("/generate", update_id=1))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=2))  # step is 'style'
+        async with env.factory() as s:
+            assert not (await s.execute(select(Job))).scalars().all()
+
+        # 2) random-character button skips the identity question
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=3))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=4))
+        dialog = await env.memory.get(ADMIN_ID)
+        assert dialog.get("step") == "count"  # not 'identity'
+        await env.app.handle_callback(env.cb("wiz:n:1", update_id=5))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=6))
+        async with env.factory() as s:
+            jobs = (await s.execute(select(Job))).scalars().all()
+        assert len(jobs) == 1
+
+        # 3) an 'unknown' post is NEVER auto-resent
+        await env.worker._run_one(jobs[0].id)  # noqa: SLF001
+        async with env.factory() as s:
+            img = (await s.execute(select(Image))).scalars().one()
+            img.status = "approved"
+            await s.commit()
+            img_id = img.id
+        env.gw.fail_mode = "timeout"
+        await env.app.handle_callback(env.cb(f"pub:{img_id}", update_id=20))
+        sent_before = len(env.gw.photos)
+        env.gw.fail_mode = None
+        await env.app.handle_callback(env.cb(f"pub:{img_id}", update_id=21))
+        assert len(env.gw.photos) == sent_before  # no second send attempt
+        async with env.factory() as s:
+            post = (await s.execute(select(Post))).scalars().one()
+            assert post.status == "unknown"
+            assert post.attempt_count == 1
+
+    _run(body())
