@@ -241,3 +241,53 @@ def test_same_bytes_stored_once_across_jobs(env) -> None:  # noqa: ANN001
     assert len(imgs2) == 0
     assert job2.status == "failed"
     assert job2.error_summary and "duplicate" in job2.error_summary
+
+
+def test_actionable_error_code_is_preserved(env) -> None:  # noqa: ANN001
+    # 2026-10-16 headless test: 'selector_timeout' surfaced as generic provider_error.
+    from waifubot.core.image_provider import (
+        STATUS_ERROR,
+        GenerationRequest,
+        GenerationResult,
+    )
+
+    class FailingProvider:
+        name = "failing"
+
+        async def health_check(self) -> bool:
+            return True
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            return GenerationResult(
+                status=STATUS_ERROR,
+                candidates=[],
+                elapsed_s=0.1,
+                provider=self.name,
+                error_code="selector_timeout",
+                error_summary="prompt textarea not visible",
+            )
+
+        async def close(self) -> None:
+            return None
+
+    factory, builder, pipeline = env
+
+    async def body():  # noqa: ANN202
+        async with factory() as session:
+            job, images, result = await run_generation_job(
+                session,
+                provider=FailingProvider(),
+                pipeline=pipeline,
+                builder=builder,
+                identity=IDENTITY,
+                style_lock=None,
+                count=1,
+                seed=42,
+            )
+            await session.commit()
+            return job, images, result
+
+    job, images, result = _run(body())
+    assert job.status == "failed"
+    assert job.error_code == "selector_timeout"  # actionable code kept
+    assert images == []

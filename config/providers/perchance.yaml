@@ -22,6 +22,11 @@ style_values:
 # CAPTCHA solving / challenge bypass / proxy rotation remain prohibited.
 launch:
   headless: false
+  # Full Chromium build (new headless mode) — Playwright's default headless uses a
+  # stripped "headless shell" that pages detect and serve a degraded UI to
+  # (user test 2026-10-16: textarea never appeared in the shell). channel:"chromium"
+  # makes headless and headed use the SAME full browser binary.
+  channel: "chromium"
   slow_mo_ms: 100
   user_data_dir: "./user_data"
   args:

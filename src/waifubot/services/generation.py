@@ -140,12 +140,14 @@ async def run_generation_job(
     if result.status in (STATUS_BLOCKED, STATUS_ERROR, STATUS_TIMEOUT):
         job.status = "failed"
         job.finished_at = _now()
+        # Prefer the provider's actionable code (e.g. selector_timeout) over a
+        # generic one (review 2026-10-16: it was being discarded).
         if result.status == STATUS_BLOCKED:
-            job.error_code = ERROR_BLOCKED  # permanent — never retried (SPEC §10)
+            job.error_code = result.error_code or ERROR_BLOCKED
         elif result.status == STATUS_TIMEOUT:
-            job.error_code = ERROR_TIMEOUT
+            job.error_code = result.error_code or ERROR_TIMEOUT
         else:
-            job.error_code = ERROR_PROVIDER
+            job.error_code = result.error_code or ERROR_PROVIDER
         job.error_summary = _summary(result.error_summary)
         return job, [], result
 

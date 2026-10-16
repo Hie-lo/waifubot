@@ -52,7 +52,7 @@ HARD_MAX_TIMEOUT_S = 300
 HARD_MAX_POLL_INTERVAL_S = 30
 HARD_MAX_TYPE_DELAY_MS = 500
 SETTLE_MS = 5000
-PROMPT_VISIBLE_TIMEOUT_MS = 30000
+PROMPT_VISIBLE_TIMEOUT_MS = 60000
 # Human-approved challenge restarts (bounded — never uncontrolled retries).
 MAX_CHALLENGE_RESTARTS = 2
 
@@ -306,6 +306,28 @@ class PerchanceProvider:
                 out.append(u)
         return out
 
+    async def _page_diagnostics(self, page: Any) -> str:  # noqa: ANN201
+        """Short, safe diagnostic string (never tokens/cookies/Base64): url, whether
+        the output iframe exists, and a page-text snippet — makes selector failures
+        actionable (user test 2026-10-16: 'page structure changed?' was not enough)."""
+        iframe = self._cfg["output_iframe"]
+        try:
+            iframe_count = await page.locator(iframe).count()
+        except Exception:  # noqa: BLE001
+            iframe_count = -1
+        try:
+            text = " ".join((await page.inner_text("body", timeout=5000)).split())[:100]
+        except Exception:  # noqa: BLE001
+            text = ""
+        return f"url={page.url} iframe[{iframe}]={iframe_count} body≈{text!r}"
+
+    async def _prompt_visible(self, page: Any, prompt_box: Any, timeout_ms: int) -> bool:  # noqa: ANN001, ANN201, ANN202
+        try:
+            await prompt_box.wait_for(state="visible", timeout=timeout_ms)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     # ---- interface --------------------------------------------------------
     async def health_check(self) -> bool:
         """Page loads, not blocked, prompt visible. Never generates an image."""
@@ -386,14 +408,21 @@ class PerchanceProvider:
         frame = page.frame_locator(self._cfg["output_iframe"])
         selectors = self._cfg["selectors"]
         prompt_box = frame.locator(selectors["prompt_textarea"])
-        try:
-            await prompt_box.wait_for(state="visible", timeout=PROMPT_VISIBLE_TIMEOUT_MS)
-        except Exception:  # noqa: BLE001
-            return finish(
-                "error", [], "selector_timeout",
-                "prompt textarea not visible — page structure changed? "
-                "verify selectors in config/providers/perchance.yaml",
-            )
+        if not await self._prompt_visible(page, prompt_box, PROMPT_VISIBLE_TIMEOUT_MS):
+            # One bounded hydration reload: page scripts sometimes fail to init on
+            # first load (seen in headless test 2026-10-16). Controlled, not a retry.
+            notes.append("page_reloaded_for_hydration")
+            try:
+                await page.reload(wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(SETTLE_MS)
+            except Exception:  # noqa: BLE001
+                pass
+            if not await self._prompt_visible(page, prompt_box, 30000):
+                diag = await self._page_diagnostics(page)
+                return finish(
+                    "error", [], "selector_timeout",
+                    f"prompt textarea not visible — {diag}",
+                )
 
         await prompt_box.click()
         await asyncio.sleep(0.5)
