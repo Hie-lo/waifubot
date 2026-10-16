@@ -72,6 +72,14 @@ Living document — updated every sprint.
   SETTINGS_SPECS runtime-changeable today. Pending user test: whether headless delivers
   images on the provider (fallback of human-like checkbox automation authorized but NOT
   implemented until results).
+- **Headless test round 1 (2026-10-16):** the actionable diagnostics worked — the page showed
+  Cloudflare's "Performing security verification" interstitial, which `detect_block` MISSED
+  (so the open-window-for-approval flow never fired). Fixed: interstitial markers added;
+  escalation policy: after operator approval the work continues headless; if headless is
+  challenged AGAIN the window stays open to finish the job (clearance does not carry to
+  headless — pending final test). Also: full Chromium via `channel: "chromium"` (Playwright's
+  default headless shell is detectable), one hydration reload, job rows keep actionable
+  error codes (`selector_timeout`).
 
 ## Confirmed for Sprint 3 (Telegram admin bot)
 - `/settings` must expose ALL admin-tunable values including art style (`default_style` key →

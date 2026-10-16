@@ -77,3 +77,25 @@ def test_adapter_config_keeps_user_approved_profile() -> None:
     assert 5 <= p["type_delay_ms_min"] <= p["type_delay_ms_max"] <= 500
     assert provider._limits["timeout_s"] <= 300  # noqa: SLF001
     assert provider._limits["challenge_wait_s"] > 0  # noqa: SLF001
+
+
+def test_detect_block_catches_cloudflare_interstitial() -> None:
+    # Headless test 2026-10-16: this exact wording slipped past the detector.
+    body = (
+        "perchance.org Performing security verification This website uses a "
+        "security service to protect itself from online attacks."
+    )
+    assert detect_block(body, "https://perchance.org/ai-text-to-image-generator") == (
+        "performing security verification"
+    )
+    assert detect_block("Just a moment...", "https://x") == "just a moment"
+    assert detect_block("Checking your browser", "https://x") == "checking your browser"
+    assert detect_block("Attention Required", "https://x") == "attention required"
+
+
+def test_detect_block_no_false_positive_on_normal_page() -> None:
+    body = (
+        "AI text to image generator description art style generate button "
+        "examples settings quality masterpiece anime girl blue hair smiling"
+    )
+    assert detect_block(body, "https://perchance.org/ai-text-to-image-generator") is None

@@ -46,6 +46,15 @@ BLOCKED_MARKERS = (
     "too many requests",
     "verify you are human",
     "unusual traffic",
+    # Cloudflare interstitial wording (headless test 2026-10-16: the page showed
+    # "Performing security verification" and this detector missed it).
+    "performing security verification",
+    "security verification",
+    "security service to protect",
+    "just a moment",
+    "checking your browser",
+    "attention required",
+    "additional verification required",
 )
 
 HARD_MAX_TIMEOUT_S = 300
@@ -167,6 +176,7 @@ class PerchanceProvider:
         self._pacing = clamp_pacing(cfg.get("launch", {}) or {})
         self._headless_default = bool((cfg.get("launch", {}) or {}).get("headless", False))
         self._headless_state: bool = self._headless_default
+        self._visible_fallback = False
         self._context: Any = None
         self._browser: Any = None
         self._pw: Any = None
@@ -279,10 +289,20 @@ class PerchanceProvider:
                 notes.append("challenge_approved_by_operator")
                 print("[provider] challenge cleared by operator — continuing")
                 if self._headless_default and not self._headless_state:
-                    # User flow: the window closes again and the work continues headless.
-                    await self.close()
-                    self._headless_state = True
-                    print("[provider] window closed — continuing headless")
+                    if self._visible_fallback:
+                        # Headless was challenged again after approval — the
+                        # clearance does not carry over; keep the window open to
+                        # finish this job visibly (closes when the job ends).
+                        notes.append("window_kept_visible_after_rechallenge")
+                        print(
+                            "[provider] headless was challenged again — keeping the "
+                            "window open to finish this job (it closes afterwards)"
+                        )
+                    else:
+                        # User flow: the window closes again and the work continues headless.
+                        await self.close()
+                        self._headless_state = True
+                        print("[provider] window closed — continuing headless")
                 return "restart"
         return "blocked"
 
@@ -366,6 +386,10 @@ class PerchanceProvider:
         restarts = 0
         try:
             while True:
+                # After the first operator-approved restart, a second headless
+                # challenge means clearance does not carry to headless — keep the
+                # window open and finish the job visibly (user-authorized fallback).
+                self._visible_fallback = restarts >= 1
                 try:
                     return await self._run_flow(
                         request, notes, finish, allow_escalation=restarts < MAX_CHALLENGE_RESTARTS
