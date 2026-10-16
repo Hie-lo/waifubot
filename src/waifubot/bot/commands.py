@@ -27,6 +27,13 @@ from waifubot.bot.posting import publish_image, resolve_unknown_send
 from waifubot.bot.worker import GenerationWorker
 from waifubot.core.admin_settings import AdminSettings
 from waifubot.core.content_safety import validate_adult_identity
+from waifubot.core.identity import (
+    TRAIT_ORDER,
+    IdentityPool,
+    assemble_identity,
+    extract_traits,
+    random_identity,
+)
 from waifubot.core.prompt_builder import PromptBuilder
 from waifubot.db.models import Character, Image, Job, Post
 from waifubot.errors import ConfigError, ValidationError
@@ -70,6 +77,7 @@ class BotApp:
         gate: AdminGate,
         builder: PromptBuilder,
         config: BotConfig,
+        identity_pool: IdentityPool,
     ) -> None:
         self._sessions = sessions
         self._settings = admin_settings
@@ -80,6 +88,7 @@ class BotApp:
         self._gate = gate
         self._builder = builder
         self._cfg = config
+        self._idpool = identity_pool
 
     # ---- dispatch ---------------------------------------------------------
     async def handle_message(self, inb: Inbound) -> None:
@@ -107,6 +116,8 @@ class BotApp:
                 await self._cb_review(inb, data, approve=False)
             elif data.startswith("savec:"):
                 await self._cb_save_character(inb, data)
+            elif data.startswith("menu:"):
+                await self._cb_menu(inb, data)
             elif data.startswith("pub:"):
                 await self._cb_publish(inb, data)
             elif data.startswith("res:"):
@@ -129,9 +140,12 @@ class BotApp:
 
     # ---- commands ---------------------------------------------------------
     async def _command(self, inb: Inbound, cmd: str) -> None:
-        if cmd in ("/start", "/help"):
+        if cmd == "/menu":
+            await self._cmd_menu(inb)
+        elif cmd in ("/start", "/help"):
             await self._gw.send_message(inb.chat_id, self._msgs.t("welcome"))
             await self._gw.send_message(inb.chat_id, self._msgs.t("help"))
+            await self._cmd_menu(inb)  # buttons first: commands as little as possible
         elif cmd == "/status":
             await self._cmd_status(inb)
         elif cmd == "/generate":
@@ -340,15 +354,15 @@ class BotApp:
 
     # ---- wizard -----------------------------------------------------------
     async def _cb_wizard(self, inb: Inbound, data: str) -> None:
-        dialog = await self._memory.get(inb.user_id)
-        if not dialog or dialog.get("kind") != "generate":
-            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
-            return
         part = data.split(":")[1]
-        if part == "x":
+        if part == "x":  # cancel works for ANY dialog (generate, savec, settings)
             await self._memory.clear(inb.user_id)
             await self._safe_answer(inb)
             await self._gw.send_message(inb.chat_id, self._msgs.t("wiz_cancelled"))
+            return
+        dialog = await self._memory.get(inb.user_id)
+        if not dialog or dialog.get("kind") != "generate":
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
             return
         if part == "s":
             key = data.split(":", 2)[2]
@@ -407,9 +421,12 @@ class BotApp:
             inb.chat_id, self._msgs.t("wiz_character_ask"), buttons=_chunk(rows)
         )
 
+    SITE_COUNTS = (2, 4, 6, 8, 16)  # the site produces 2/4/6/8/16/32 (32 > hard max)
+
     async def _ask_count(self, inb: Inbound) -> None:
         max_count = await self._settings.get_or("images_per_job", 4)
-        rows = [(str(i), f"wiz:n:{i}") for i in range(1, min(max_count, 20) + 1)]
+        allowed = [c for c in self.SITE_COUNTS if c <= max_count] or [2]
+        rows = [(str(i), f"wiz:n:{i}") for i in allowed]
         rows.append((self._msgs.t("wiz_random"), "wiz:n:rnd"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_count_ask"), buttons=_chunk(rows)
@@ -454,11 +471,14 @@ class BotApp:
                     ).scalars().first()
                     identity = (
                         row.identity_prompt if row
-                        else "adult woman, 25 years old, long blue hair, red eyes"
+                        else random_identity(self._idpool)  # diverse per job
                     )
                     style_lock = (row.style_lock or None) if row else None
             validate_adult_identity(identity, self._cfg.blocklist)
-            count = int(dialog.get("count") or 0) or random.randint(1, 4)
+            count = (
+                int(dialog.get("count") or 0)
+                or random.choice(list(self.SITE_COUNTS))
+            )
             style_lock = style_lock or await self._settings.get("style_lock")
             max_images = await self._settings.get_or("images_per_job", 4)
             max_jobs = await self._settings.get_or("daily_cap", 20)
@@ -524,67 +544,226 @@ class BotApp:
         )
 
     async def _cb_save_character(self, inb: Inbound, data: str) -> None:
-        job_id = int(data.split(":")[1])
-        async with self._sessions() as s:
-            job = await s.get(Job, job_id)
-            if job is None:
-                await s.commit()
-                await self._safe_answer(inb, self._msgs.t("review_stale"))
-                return
-            identity = json.loads(job.filters_json or "{}").get("identity", "")
-        await self._safe_answer(inb)
-        await self._memory.set(
-            inb.user_id, {"kind": "savec", "job_id": job_id, "identity": identity, "step": "name"}
+        parts = data.split(":")
+        action = parts[1]
+        dialog = await self._memory.get(inb.user_id)
+        if action.isdigit():
+            job_id = int(action)
+            async with self._sessions() as s:
+                job = await s.get(Job, job_id)
+                if job is None:
+                    await s.commit()
+                    await self._safe_answer(inb, self._msgs.t("review_stale"))
+                    return
+                identity = json.loads(job.filters_json or "{}").get("identity", "")
+            await self._safe_answer(inb)
+            await self._memory.set(
+                inb.user_id,
+                {"kind": "savec", "job_id": job_id, "identity": identity, "step": "name"},
+            )
+            await self._gw.send_message(inb.chat_id, self._msgs.t("savec_name_ask"))
+            return
+        if not dialog or dialog.get("kind") != "savec":
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+            return
+        if action == "p":  # precise prompt builder (user request 2026-10-16)
+            traits = extract_traits(self._idpool, dialog.get("identity") or "")
+            dialog["traits"] = traits
+            dialog["extras"] = ""
+            dialog["precise"] = True
+            dialog["step"] = f"trait:{TRAIT_ORDER[0]}"
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._ask_trait(inb, dialog, TRAIT_ORDER[0])
+        elif action == "j":  # keep this generation's identity, exactly
+            dialog["precise"] = False
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._savec_review(inb, dialog)
+        elif action == "m":  # write the description by hand
+            dialog["precise"] = False
+            dialog["step"] = "identity"
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._gw.send_message(inb.chat_id, self._msgs.t("savec_identity_ask"))
+        elif action == "t":  # savec:t:<trait>:<value>
+            trait, value = parts[2], ":".join(parts[3:])
+            dialog.setdefault("traits", {})[trait] = value
+            nxt = self._next_trait(dialog)
+            if nxt is None:
+                dialog["step"] = "trait_extras"
+                await self._memory.set(inb.user_id, dialog)
+                await self._safe_answer(inb)
+                await self._ask_extras(inb)
+            else:
+                dialog["step"] = f"trait:{nxt}"
+                await self._memory.set(inb.user_id, dialog)
+                await self._safe_answer(inb)
+                await self._ask_trait(inb, dialog, nxt)
+        elif action == "tr":  # random pick for this trait (skipped = random)
+            trait = parts[2]
+            values = self._idpool.values(trait)
+            dialog.setdefault("traits", {})[trait] = random.choice(values).value
+            nxt = self._next_trait(dialog)
+            if nxt is None:
+                dialog["step"] = "trait_extras"
+                await self._memory.set(inb.user_id, dialog)
+                await self._safe_answer(inb)
+                await self._ask_extras(inb)
+            else:
+                dialog["step"] = f"trait:{nxt}"
+                await self._memory.set(inb.user_id, dialog)
+                await self._safe_answer(inb)
+                await self._ask_trait(inb, dialog, nxt)
+        elif action == "tx":  # skip extras
+            dialog.setdefault("extras", "")
+            await self._safe_answer(inb)
+            await self._savec_review(inb, dialog)
+        elif action == "ok":
+            await self._safe_answer(inb)
+            await self._savec_commit(inb, dialog)
+
+    def _next_trait(self, dialog: dict) -> str | None:
+        chosen = dialog.get("traits") or {}
+        for trait in TRAIT_ORDER:
+            if trait not in chosen:
+                return trait
+        return None
+
+    async def _ask_trait(self, inb: Inbound, dialog: dict, trait: str) -> None:
+        lang = self._msgs.lang
+        rows = [
+            (self._idpool.label(trait, tv.value, lang), f"savec:t:{trait}:{tv.value}")
+            for tv in self._idpool.values(trait)
+        ]
+        rows.append((self._msgs.t("savec_random_pick"), f"savec:tr:{trait}"))
+        await self._gw.send_message(
+            inb.chat_id,
+            self._msgs.t("savec_trait_ask", trait=self._msgs.t(f"trait_{trait}")),
+            buttons=_chunk(rows),
         )
-        await self._gw.send_message(inb.chat_id, self._msgs.t("savec_name_ask"))
+
+    async def _ask_extras(self, inb: Inbound) -> None:
+        buttons: Buttons = [[(self._msgs.t("savec_skip"), "savec:tx")]]
+        await self._gw.send_message(
+            inb.chat_id, self._msgs.t("savec_extras_ask"), buttons=buttons
+        )
+
+    async def _savec_review(self, inb: Inbound, dialog: dict) -> None:
+        if dialog.get("precise"):
+            dialog["final_identity"] = assemble_identity(
+                self._idpool,
+                dialog.get("traits") or {},
+                extras=dialog.get("extras") or "",
+                precise=True,
+            )
+        else:
+            dialog["final_identity"] = (dialog.get("identity") or "").strip()
+        dialog["step"] = "review"
+        await self._memory.set(inb.user_id, dialog)
+        buttons: Buttons = [
+            [(self._msgs.t("savec_confirm"), "savec:ok"),
+             (self._msgs.t("wiz_cancel"), "wiz:x")],
+        ]
+        await self._gw.send_message(
+            inb.chat_id,
+            f"{self._msgs.t('savec_review_ask')}\n\n{dialog['final_identity']}",
+            buttons=buttons,
+        )
+
+    async def _savec_commit(self, inb: Inbound, dialog: dict) -> None:
+        identity = (dialog.get("final_identity") or "").strip()
+        try:
+            validate_adult_identity(identity, self._cfg.blocklist)
+        except ValidationError as e:
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("savec_invalid", error=str(e))
+            )
+            return
+        name = dialog.get("name") or "unnamed"
+        async with self._sessions() as s:
+            prev = (
+                await s.execute(
+                    select(Character).where(Character.name == name)
+                    .order_by(Character.version.desc()).limit(1)
+                )
+            ).scalars().first()
+            if prev is not None:
+                prev.is_active = False
+            row = Character(
+                name=name,
+                identity_prompt=identity,
+                style_lock=await self._settings.get("style_lock"),
+                version=(prev.version + 1) if prev else 1,
+                parent_id=prev.id if prev else None,
+                is_active=True,
+            )
+            s.add(row)
+            await s.flush()
+            await s.commit()
+            version = row.version
+        await self._memory.clear(inb.user_id)
+        await self._gw.send_message(
+            inb.chat_id, self._msgs.t("savec_saved", name=name, version=version)
+        )
+
+    # ---- interactive main menu (user rule: buttons over commands) ---------
+    MENU_MAP: dict[str, str] = {
+        "generate": "/generate",
+        "inbox": "/inbox",
+        "queue": "/queue",
+        "pool": "/pool",
+        "publish": "/publish",
+        "settings": "/settings",
+        "characters": "/characters",
+        "pause": "/pause",
+        "resume": "/resume",
+        "help": "/help",
+    }
+
+    async def _cmd_menu(self, inb: Inbound) -> None:
+        rows = [
+            (self._msgs.t(f"menu_{key}"), f"menu:{key}")
+            for key in self.MENU_MAP
+        ]
+        await self._gw.send_message(
+            inb.chat_id, self._msgs.t("menu_title"), buttons=_chunk(rows)
+        )
+
+    async def _cb_menu(self, inb: Inbound, data: str) -> None:
+        key = data.split(":", 1)[1]
+        cmd = self.MENU_MAP.get(key)
+        await self._safe_answer(inb)
+        if cmd is None:
+            return
+        await self._command(inb, cmd)
 
     async def _savec_input(self, inb: Inbound, dialog: dict, text: str) -> None:
         step = dialog.get("step")
         if step == "name":
             dialog["name"] = text[:100]
-            dialog["step"] = "identity"
+            dialog["step"] = "choose"
             await self._memory.set(inb.user_id, dialog)
-            proposed = dialog.get("identity") or ""
+            buttons: Buttons = [
+                [(self._msgs.t("savec_build_precise"), "savec:p")],
+                [(self._msgs.t("savec_use_job"), "savec:j"),
+                 (self._msgs.t("savec_write_own"), "savec:m")],
+            ]
             await self._gw.send_message(
-                inb.chat_id,
-                f"{self._msgs.t('savec_identity_ask')}\n\n{proposed}",
+                inb.chat_id, self._msgs.t("savec_choose_ask"), buttons=buttons
             )
             return
-        if step == "identity":
-            identity = dialog.get("identity") or "" if text.lower() in OK_WORDS else text
-            try:
-                validate_adult_identity(identity, self._cfg.blocklist)
-            except ValidationError as e:
-                await self._gw.send_message(
-                    inb.chat_id, self._msgs.t("savec_invalid", error=str(e))
-                )
-                return
-            name = dialog.get("name") or "unnamed"
-            async with self._sessions() as s:
-                prev = (
-                    await s.execute(
-                        select(Character).where(Character.name == name)
-                        .order_by(Character.version.desc()).limit(1)
-                    )
-                ).scalars().first()
-                if prev is not None:
-                    prev.is_active = False
-                row = Character(
-                    name=name,
-                    identity_prompt=identity,
-                    style_lock=await self._settings.get("style_lock"),
-                    version=(prev.version + 1) if prev else 1,
-                    parent_id=prev.id if prev else None,
-                    is_active=True,
-                )
-                s.add(row)
-                await s.flush()
-                await s.commit()
-                version = row.version
-            await self._memory.clear(inb.user_id)
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("savec_saved", name=name, version=version)
+        if step == "trait_extras":
+            dialog["extras"] = text[:200]
+            await self._savec_review(inb, dialog)
+            return
+        if step == "identity":  # manual path: text now, review before saving
+            dialog["identity"] = (
+                dialog.get("identity") or "" if text.lower() in OK_WORDS else text
             )
+            dialog["precise"] = False
+            await self._memory.set(inb.user_id, dialog)
+            await self._savec_review(inb, dialog)
 
     # ---- publish / ambiguous resolution -----------------------------------
     async def _cb_publish(self, inb: Inbound, data: str) -> None:

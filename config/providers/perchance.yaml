@@ -53,7 +53,9 @@ launch:
 limits:
   timeout_s: 240
   poll_interval_s: 3.0
-  min_data_url_chars: 5000
+  # 2000 (was 5000): simple/small images were silently dropped — a 4-image
+  # request came back with 3 (user test 2026-10-16). PIL still validates.
+  min_data_url_chars: 2000
   include_canvas_fallback: false
   # Wait up to N seconds for a HUMAN to approve Cloudflare/challenge pages in the
   # visible browser window (we never solve them). 0 = treat as blocked immediately.

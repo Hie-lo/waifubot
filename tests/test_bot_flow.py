@@ -21,13 +21,14 @@ from waifubot.bot.messages import Messages
 from waifubot.bot.worker import GenerationWorker
 from waifubot.core.admin_settings import AdminSettings
 from waifubot.core.content_safety import load_blocklist
+from waifubot.core.identity import load_identity_pool
 from waifubot.core.image_pipeline import ImagePipeline
 from waifubot.core.prompt_builder import PromptBuilder
 from waifubot.core.providers.mock import MockProvider
 from waifubot.core.tags_pool import load_tags_pool
 from waifubot.db import models  # noqa: F401
 from waifubot.db.base import Base
-from waifubot.db.models import Image, Job, Post
+from waifubot.db.models import Character, Image, Job, Post
 from waifubot.db.session import make_engine, make_session_factory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -58,6 +59,7 @@ class Env:
         self.factory = factory
         pool = load_tags_pool(REPO_ROOT / "config" / "tags_pool.yaml")
         blocklist = load_blocklist(REPO_ROOT / "config" / "blocklist.yaml")
+        idpool = load_identity_pool(REPO_ROOT / "config" / "identity_pool.yaml")
         self.gw = gateway or FakeGateway()
         self.msgs = Messages(REPO_ROOT / "locales", "fa")
         self.settings = AdminSettings(factory)
@@ -90,6 +92,7 @@ class Env:
                 style_values={"anime": "ref:optionKeyName:Anime", "no_style": ""},
                 blocklist=blocklist,
             ),
+            identity_pool=idpool,
         )
 
     def msg(self, text: str, user_id: int = ADMIN_ID, update_id: int = 1) -> Inbound:
@@ -234,7 +237,7 @@ def test_save_character_from_job_metadata(env: Env) -> None:
         await env.app.handle_callback(env.cb("wiz:s:anime", update_id=2))
         await env.app.handle_callback(env.cb("wiz:c:0", update_id=3))
         await env.app.handle_message(env.msg(IDENTITY, update_id=4))
-        await env.app.handle_callback(env.cb("wiz:n:1", update_id=5))
+        await env.app.handle_callback(env.cb("wiz:n:2", update_id=5))
         await env.app.handle_callback(env.cb("wiz:y", update_id=6))
         async with env.factory() as s:
             job = (await s.execute(
@@ -246,7 +249,8 @@ def test_save_character_from_job_metadata(env: Env) -> None:
         # Save Character dialog from the job's stored identity
         await env.app.handle_callback(env.cb(f"savec:{job_id}", update_id=10))
         await env.app.handle_message(env.msg("Yuki", update_id=11))
-        await env.app.handle_message(env.msg("ok", update_id=12))  # accept proposed
+        await env.app.handle_callback(env.cb("savec:j", update_id=12))  # use job identity
+        await env.app.handle_callback(env.cb("savec:ok", update_id=13))  # confirm review
         async with env.factory() as s:
             from waifubot.db.models import Character
 
@@ -289,7 +293,7 @@ def test_review_fixes_regression(env: Env) -> None:
         await env.app.handle_callback(env.cb("wiz:c:-1", update_id=4))
         dialog = await env.memory.get(ADMIN_ID)
         assert dialog.get("step") == "count"  # not 'identity'
-        await env.app.handle_callback(env.cb("wiz:n:1", update_id=5))
+        await env.app.handle_callback(env.cb("wiz:n:2", update_id=5))
         await env.app.handle_callback(env.cb("wiz:y", update_id=6))
         async with env.factory() as s:
             jobs = (await s.execute(select(Job))).scalars().all()
@@ -298,7 +302,7 @@ def test_review_fixes_regression(env: Env) -> None:
         # 3) an 'unknown' post is NEVER auto-resent
         await env.worker._run_one(jobs[0].id)  # noqa: SLF001
         async with env.factory() as s:
-            img = (await s.execute(select(Image))).scalars().one()
+            img = (await s.execute(select(Image))).scalars().first()
             img.status = "approved"
             await s.commit()
             img_id = img.id
@@ -312,5 +316,55 @@ def test_review_fixes_regression(env: Env) -> None:
             post = (await s.execute(select(Post))).scalars().one()
             assert post.status == "unknown"
             assert post.attempt_count == 1
+
+    _run(body())
+
+
+def test_precise_face_prompt_wizard_and_menu(env: Env) -> None:
+    """User request 2026-10-16: savec builds a precise face prompt via buttons,
+    and the main menu reaches every function without typing commands."""
+
+    async def body() -> None:
+        # menu: every entry is a button; menu:generate opens the wizard
+        await env.app.handle_message(env.msg("/menu", update_id=1))
+        menu_msg = env.gw.messages[-1]
+        labels = [b[0] for row in (menu_msg[2] or []) for b in row]
+        assert any("ساخت" in lab for lab in labels)  # fa labels (LANGUAGE default)
+        await env.app.handle_callback(env.cb("menu:generate", update_id=2))
+        assert (await env.memory.get(ADMIN_ID))["step"] == "style"
+
+        # precise savec wizard: name -> build precise -> trait buttons -> ok
+        env.gw.messages.clear()
+        await env.app.handle_callback(env.cb("savec:99", update_id=3))  # stale job id
+        # use a real job instead
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=4))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=5))
+        await env.app.handle_callback(env.cb("wiz:n:2", update_id=6))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=7))
+        async with env.factory() as s:
+            job_id = (await s.execute(select(Job))).scalars().one().id
+        await env.app.handle_callback(env.cb(f"savec:{job_id}", update_id=8))
+        await env.app.handle_message(env.msg("Sakura", update_id=9))
+        await env.app.handle_callback(env.cb("savec:p", update_id=10))  # precise
+        # choose every trait explicitly (no randomness in this test)
+        picks = [
+            ("age", "25"), ("hair_color", "black"), ("hair_style", "ponytail"),
+            ("eye_color", "green"), ("skin", "fair"), ("face", "oval"),
+        ]
+        uid = 11
+        for trait, value in picks:
+            await env.app.handle_callback(env.cb(f"savec:t:{trait}:{value}", update_id=uid))
+            uid += 1
+        await env.app.handle_message(env.msg("red ribbon", update_id=uid))
+        await env.app.handle_callback(env.cb("savec:ok", update_id=uid + 1))
+        async with env.factory() as s:
+            row = (await s.execute(select(Character))).scalars().one()
+        assert row.name == "Sakura"
+        assert row.identity_prompt.startswith("adult woman, 25 years old")
+        assert "black ponytail hair" in row.identity_prompt
+        assert "green eyes" in row.identity_prompt
+        assert "oval face" in row.identity_prompt
+        assert "red ribbon" in row.identity_prompt
+        assert "consistent facial features" in row.identity_prompt  # face anchor
 
     _run(body())

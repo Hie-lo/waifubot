@@ -37,6 +37,7 @@ from waifubot.bot.worker import GenerationWorker
 from waifubot.config import Settings, ensure_runtime_dirs
 from waifubot.core.admin_settings import AdminHardLimits, AdminSettings
 from waifubot.core.content_safety import load_blocklist
+from waifubot.core.identity import load_identity_pool
 from waifubot.core.image_pipeline import ImagePipeline
 from waifubot.core.prompt_builder import PromptBuilder
 from waifubot.core.providers import create_provider, load_provider_config
@@ -157,6 +158,7 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
     provider = create_provider(provider_cfg)
     pipeline = ImagePipeline(settings.storage_root)
     blocklist = load_blocklist(REPO_ROOT / "config" / "blocklist.yaml")
+    idpool = load_identity_pool(REPO_ROOT / "config" / "identity_pool.yaml")
     builder = PromptBuilder(load_tags_pool(REPO_ROOT / "config" / "tags_pool.yaml"), blocklist)
     msgs = Messages(REPO_ROOT / "locales", os.environ.get("LANGUAGE", "fa"))
     gate = AdminGate(settings.admin_user_ids)
@@ -189,6 +191,7 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
         worker=worker,
         gate=gate,
         builder=builder,
+        identity_pool=idpool,
         config=BotConfig(
             admin_ids=settings.admin_user_ids,
             dest_chat_id=settings.destination_chat_id,

@@ -75,7 +75,7 @@ _JS_SCAN = """
         const imgs = Array.from(document.querySelectorAll('img'));
         for (const img of imgs) {
             const src = img.src || img.getAttribute('src') || '';
-            if (src.startsWith('data:image/') && src.length > 5000) {
+            if (src.startsWith('data:image/') && src.length > 2000) {
                 out.push(src);
             } else if (fallback && src && !src.includes('icon') && !src.includes('logo')
                        && img.width > 150) {
@@ -86,7 +86,7 @@ _JS_SCAN = """
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0);
                     const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-                    if (dataUrl.length > 5000) {
+                    if (dataUrl.length > 2000) {
                         out.push(dataUrl);
                     }
                 } catch (e) {}
@@ -97,7 +97,7 @@ _JS_SCAN = """
                 try {
                     if (c.width > 200 && c.height > 200) {
                         const dataUrl = c.toDataURL('image/jpeg', 0.95);
-                        if (dataUrl && dataUrl.length > 5000) {
+                        if (dataUrl && dataUrl.length > 2000) {
                             out.push(dataUrl);
                         }
                     }
@@ -164,6 +164,18 @@ def clamp_pacing(launch: Mapping[str, Any]) -> dict[str, Any]:
         "pause_ms_min": pause_lo,
         "pause_ms_max": pause_hi,
     }
+
+
+SITE_COUNTS: tuple[int, ...] = (2, 4, 6, 8, 16, 32)  # the site's real options
+# (user report 2026-10-16: 2/4/6/8/16/32 — never 1/2/3/4).
+
+
+def snap_to_site_count(count: int) -> int:
+    """Round a requested count UP to the nearest value the site can produce."""
+    for value in SITE_COUNTS:
+        if value >= count:
+            return value
+    return SITE_COUNTS[-1]
 
 
 class _Restart(Exception):
@@ -425,6 +437,33 @@ class PerchanceProvider:
             text = ""
         return f"url={page.url} iframe[{iframe}]={iframe_count} body≈{text!r}"
 
+    async def _apply_count_select(self, frame: Any, wanted: int) -> tuple[int, str]:
+        """Set the site's images-per-run selector. The selector is MEASURED at
+        runtime (the <select> whose options are the site counts), never invented
+        (AGENT.md). If not found, the site keeps its own default — noted."""
+        try:
+            count = await frame.locator("select").count()
+        except Exception:  # noqa: BLE001
+            return wanted, "count_select_unavailable"
+        for i in range(count):
+            sel = frame.locator("select").nth(i)
+            try:
+                vals = [
+                    str(v).strip()
+                    for v in await sel.evaluate(
+                        "el => Array.from(el.options).map(o => o.value)"
+                    )
+                ]
+            except Exception:  # noqa: BLE001
+                continue
+            if str(wanted) in vals and {"2", "4", "8"}.issubset(set(vals)):
+                try:
+                    await sel.select_option(value=str(wanted), timeout=5000)
+                    return wanted, ""
+                except Exception:  # noqa: BLE001
+                    return wanted, "count_select_failed"
+        return wanted, "count_select_not_found"
+
     async def _prompt_visible(self, page: Any, prompt_box: Any, timeout_ms: int) -> bool:  # noqa: ANN001, ANN201, ANN202
         try:
             await prompt_box.wait_for(state="visible", timeout=timeout_ms)
@@ -529,6 +568,10 @@ class PerchanceProvider:
                     f"prompt textarea not visible — {diag}",
                 )
 
+        wanted = snap_to_site_count(request.count)
+        applied, note = await self._apply_count_select(frame, wanted)
+        if note:
+            notes.append(note)
         await prompt_box.click()
         await asyncio.sleep(0.5)
         await page.keyboard.press("Control+A")
