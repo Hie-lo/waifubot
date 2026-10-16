@@ -98,3 +98,11 @@ Waiting for explicit user approval.
   close-then-retry-headless anymore. `headless: true` is the default. Headless alone is still
   tried first every batch (it currently gets challenged every time); human-like checkbox
   automation stays the authorized LAST fallback only if a real checkbox blocks unattended work.
+- **Headless test round 3 (2026-10-16):** `--start-minimized` is IGNORED on Windows/WSLg —
+  the window came up full-size and on top (user report). Decisive fix per user UX rules:
+  a launch-mode ladder — pure headless -> VIRTUAL DISPLAY (Xvfb): a real headed browser on an
+  invisible screen (pages see a normal windowed browser → the interstitial clears by itself,
+  and NOTHING appears on the desktop) -> last resort: one small window with a REAL minimize
+  via CDP `Browser.setWindowBounds {windowState: minimized}` (plus --window-size=520,360).
+  `pick_launch_mode()` is unit-tested; Xvfb is auto-detected (install once: `sudo apt install
+  -y xvfb`); no Xvfb → same flow with a real (minimized) window.

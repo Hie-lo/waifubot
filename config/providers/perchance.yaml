@@ -27,6 +27,11 @@ launch:
   # `--headed` on live-smoke overrides this for debugging.
   headless: true
   open_minimized: true
+  # Windowless mode: run a REAL headed browser on an invisible Xvfb display when the
+  # "Xvfb" binary exists (auto). Pages see a normal windowed browser (no challenge),
+  # and nothing appears on the desktop. Install once: sudo apt install -y xvfb.
+  # "false" disables it; --headless forces pure headless; --headed forces a real window.
+  virtual_display: "auto"
   # Full Chromium build (new headless mode) — Playwright's default headless uses a
   # stripped "headless shell" that pages detect and serve a degraded UI to
   # (user test 2026-10-16: textarea never appeared in the shell). channel:"chromium"

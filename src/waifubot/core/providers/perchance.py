@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import random
 import re
+import shutil
+import subprocess
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -167,6 +170,31 @@ class _Restart(Exception):
     """Internal: the operator approved a challenge — restart the flow once."""
 
 
+def pick_launch_mode(
+    launch_cfg: Mapping[str, Any],
+    *,
+    xvfb_available: bool,
+    force_headless: bool = False,
+    force_headed: bool = False,
+) -> str:
+    """Choose how the browser runs (user UX rules 2026-10-16):
+    - "window":  a real on-screen window (last resort; minimized, never on top).
+    - "virtual": a REAL headed browser on an invisible Xvfb display — no window on
+      the user's desktop, but pages see a normal windowed browser (no challenge).
+    - "headless": pure headless (fastest; currently challenged by Cloudflare).
+    Priority: explicit flags > virtual (if Xvfb exists) > headless > window."""
+    if force_headed:
+        return "window"
+    if force_headless:
+        return "headless"
+    prefer = str(launch_cfg.get("virtual_display", "auto")).lower()
+    if prefer in ("auto", "true", "1", "yes") and xvfb_available:
+        return "virtual"
+    if bool(launch_cfg.get("headless", True)):
+        return "headless"
+    return "window"
+
+
 class PerchanceProvider:
     name = "perchance_playwright"
 
@@ -174,28 +202,53 @@ class PerchanceProvider:
         self._cfg = cfg
         self._limits = clamp_limits(cfg.get("limits", {}) or {})
         self._pacing = clamp_pacing(cfg.get("launch", {}) or {})
-        self._headless_default = bool((cfg.get("launch", {}) or {}).get("headless", False))
-        self._headless_state: bool = self._headless_default
+        launch_cfg = cfg.get("launch", {}) or {}
+        self._headless_default = bool(launch_cfg.get("headless", True))
+        self._mode_default = pick_launch_mode(
+            launch_cfg,
+            xvfb_available=bool(shutil.which("Xvfb")),
+            force_headless=bool(launch_cfg.get("force_headless", False)),
+            force_headed=bool(launch_cfg.get("force_headed", False)),
+        )
+        self._mode: str = self._mode_default
         self._context: Any = None
         self._browser: Any = None
         self._pw: Any = None
+        self._xvfb_proc: Any = None
+        self._virtual_display: str = ""
 
     # ---- browser lifecycle -------------------------------------------------
+    async def _ensure_virtual_display(self) -> None:  # noqa: ANN202
+        if self._virtual_display:
+            return
+        if not shutil.which("Xvfb"):
+            return
+        self._xvfb_proc = subprocess.Popen(
+            ["Xvfb", ":99", "-screen", "0", "1280x800x24"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        await asyncio.sleep(0.6)
+        self._virtual_display = ":99"
+
     async def _launch(self) -> Any:  # noqa: ANN202
         from playwright.async_api import async_playwright
 
         launch_cfg = self._cfg.get("launch", {}) or {}
         self._pw = await async_playwright().start()
-        kwargs: dict[str, Any] = {"headless": bool(self._headless_state)}
+        kwargs: dict[str, Any] = {"headless": self._mode == "headless"}
         slow_mo = int(launch_cfg.get("slow_mo_ms", 100))
         if slow_mo > 0:
             kwargs["slow_mo"] = min(slow_mo, 2000)
         args = [str(a) for a in (launch_cfg.get("args") or [])]
-        # User UX rule 2026-10-16: a visible window must never steal focus or sit
-        # on top — start it minimized (best-effort) and let it work underneath.
-        if not self._headless_state and bool(launch_cfg.get("open_minimized", True)):
-            if "--start-minimized" not in args:
-                args.append("--start-minimized")
+        if self._mode == "virtual":
+            await self._ensure_virtual_display()
+            if self._virtual_display:
+                kwargs["env"] = {**os.environ, "DISPLAY": self._virtual_display}
+        if self._mode == "window":
+            # User UX rule: never on top, never big — small window + real minimize.
+            for extra in ("--window-size=520,360", "--start-minimized"):
+                if extra not in args:
+                    args.append(extra)
         if args:
             kwargs["args"] = args
         channel = str(launch_cfg.get("channel", "") or "")
@@ -206,10 +259,27 @@ class PerchanceProvider:
             self._context = await self._pw.chromium.launch_persistent_context(
                 user_data_dir, **kwargs
             )
-            return self._context.pages[0] if self._context.pages else await self._context.new_page()
-        self._browser = await self._pw.chromium.launch(**kwargs)
-        self._context = await self._browser.new_context()
-        return await self._context.new_page()
+            page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        else:
+            self._browser = await self._pw.chromium.launch(**kwargs)
+            self._context = await self._browser.new_context()
+            page = await self._context.new_page()
+        if self._mode == "window":
+            await self._minimize_window(page)
+        return page
+
+    async def _minimize_window(self, page: Any) -> None:  # noqa: ANN201, ANN202
+        """Real OS-level minimize via CDP (the --start-minimized flag is ignored on
+        Windows/WSLg — user report 2026-10-16). Best-effort, never raises."""
+        try:
+            cdp = await self._context.new_cdp_session(page)
+            info = await cdp.send("Browser.getWindowForTarget")
+            await cdp.send(
+                "Browser.setWindowBounds",
+                {"windowId": info["windowId"], "bounds": {"windowState": "minimized"}},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _ensure_page(self) -> Any:  # noqa: ANN202
         if self._context is not None:
@@ -237,6 +307,14 @@ class PerchanceProvider:
             except Exception:  # noqa: BLE001
                 pass
             self._pw = None
+        if self._xvfb_proc is not None:
+            try:
+                self._xvfb_proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+            self._xvfb_proc = None
+            self._virtual_display = ""
+        self._mode = self._mode_default
 
     # ---- helpers ----------------------------------------------------------
     async def _blocked_reason(self, page: Any) -> str | None:  # noqa: ANN201
@@ -256,27 +334,41 @@ class PerchanceProvider:
             await asyncio.sleep(delay)
 
     async def _resolve_challenge(self, page: Any, notes: list[str], where: str) -> str:
-        """A challenge page appeared. USER UX RULES 2026-10-16:
-        - headless runs: open ONE background (minimized, never on-top) window with the
-          same profile. The Cloudflare interstitial usually clears BY ITSELF in a real
-          window; a checkbox is ticked by the human only if one actually appears.
-          The window STAYS until the batch ends (close+retry-headless just re-challenges
-          and pops the window twice — learned in the live test), then closes.
-        - visible runs: wait in the existing window.
-        The automation NEVER solves or bypasses the challenge (prohibition).
-        Returns "restart" (page cleared — rerun the flow) or "blocked"."""
+        """A challenge page appeared. UX ladder (user rules 2026-10-16) — the
+        automation NEVER solves or bypasses it:
+        - headless  -> switch to a virtual (Xvfb) display: a REAL windowed browser
+          on an invisible screen — pages see a normal browser (the interstitial
+          clears by itself), and NO window appears on the user's desktop.
+        - virtual   -> if a real checkbox ever blocks, open ONE small minimized
+          window for a human tick (never on top).
+        - window    -> wait in the window.
+        Each step waits for the page to clear, then restarts the flow in that mode
+        (the mode stays for the rest of the batch). Returns "restart" or "blocked"."""
         budget = self._limits["challenge_wait_s"]
         if budget <= 0:
             return "blocked"
-        if self._headless_state:
-            print(
-                f"[provider] challenge ({where}) — opening one background window for "
-                "the security check (it usually clears by itself; tick a checkbox only "
-                "if one appears). The window works underneath, never on top, and closes "
-                f"when the batch ends. Waiting up to {budget:.0f}s..."
-            )
+        if self._mode in ("headless", "virtual"):
+            use_virtual = self._mode == "headless" and bool(shutil.which("Xvfb"))
+            next_mode = "virtual" if use_virtual else "window"
+            if use_virtual:
+                print(
+                    f"[provider] challenge ({where}) — switching to a virtual "
+                    "(invisible) display: real browser, NO window on your desktop. "
+                    f"Waiting up to {budget:.0f}s..."
+                )
+            else:
+                if not shutil.which("Xvfb"):
+                    print(
+                        "[provider] tip: install Xvfb for fully windowless runs: "
+                        "sudo apt install -y xvfb"
+                    )
+                print(
+                    f"[provider] challenge ({where}) — opening ONE small minimized "
+                    "window (never on top; tick a checkbox only if one appears). "
+                    f"Waiting up to {budget:.0f}s..."
+                )
             await self.close()
-            self._headless_state = False
+            self._mode = next_mode
             page = await self._launch()
             try:
                 await page.goto(
@@ -287,14 +379,14 @@ class PerchanceProvider:
         else:
             print(
                 f"[provider] challenge ({where}) — waiting up to {budget:.0f}s for the "
-                "security check to clear (it usually does by itself)"
+                "security check to clear (usually automatic; tick only if a checkbox appears)"
             )
         deadline = time.monotonic() + budget
         while time.monotonic() < deadline:
             await asyncio.sleep(5)
             if not await self._blocked_reason(page):
-                notes.append("challenge_cleared")
-                print("[provider] challenge cleared — continuing in the same window")
+                notes.append(f"challenge_cleared_in_{self._mode}")
+                print(f"[provider] challenge cleared — continuing ({self._mode})")
                 return "restart"
         return "blocked"
 
@@ -377,7 +469,7 @@ class PerchanceProvider:
         # Keep the browser across generate() calls (user UX rule 2026-10-16):
         # one background window per batch, fewer challenges; close() ends it.
         if self._context is None:
-            self._headless_state = self._headless_default
+            self._mode = self._mode_default
         restarts = 0
         try:
             while True:

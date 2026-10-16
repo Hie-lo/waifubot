@@ -99,3 +99,23 @@ def test_detect_block_no_false_positive_on_normal_page() -> None:
         "examples settings quality masterpiece anime girl blue hair smiling"
     )
     assert detect_block(body, "https://perchance.org/ai-text-to-image-generator") is None
+
+
+def test_pick_launch_mode_ladder() -> None:
+    from waifubot.core.providers.perchance import pick_launch_mode
+
+    # Explicit flags win.
+    assert pick_launch_mode({}, xvfb_available=True, force_headed=True) == "window"
+    assert pick_launch_mode({"headless": False}, xvfb_available=True, force_headless=True) == (
+        "headless"
+    )
+    # Auto: virtual (invisible real browser) when Xvfb exists.
+    assert pick_launch_mode({"virtual_display": "auto"}, xvfb_available=True) == "virtual"
+    # No Xvfb -> headless if configured, else window.
+    assert pick_launch_mode({"headless": True}, xvfb_available=False) == "headless"
+    assert pick_launch_mode({"headless": False}, xvfb_available=False) == "window"
+    # virtual_display can be disabled.
+    assert (
+        pick_launch_mode({"headless": True, "virtual_display": "false"}, xvfb_available=True)
+        == "headless"
+    )

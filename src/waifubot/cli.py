@@ -175,11 +175,15 @@ async def _live_smoke(settings: Settings, args: argparse.Namespace) -> int:
     # Visibility override (user request 2026-10-16): test headless runs with the
     # exact same flow; a window opens only when a challenge needs the operator.
     if getattr(args, "headless", False):
-        provider_cfg = {**provider_cfg,
-                        "launch": {**(provider_cfg.get("launch") or {}), "headless": True}}
+        provider_cfg = {**provider_cfg, "launch": {
+            **(provider_cfg.get("launch") or {}),
+            "headless": True, "force_headless": True, "force_headed": False,
+        }}
     elif getattr(args, "headed", False):
-        provider_cfg = {**provider_cfg,
-                        "launch": {**(provider_cfg.get("launch") or {}), "headless": False}}
+        provider_cfg = {**provider_cfg, "launch": {
+            **(provider_cfg.get("launch") or {}),
+            "headless": False, "force_headed": True, "force_headless": False,
+        }}
     provider = create_provider(provider_cfg)
 
     # Style: admin setting -> provider style mapping (never invented).
