@@ -21,6 +21,25 @@ class TelegramGateway(Protocol):
         """Send a text message; returns its message_id."""
         ...
 
+    async def delete_message(self, chat_id: int | str, message_id: int) -> bool:
+        """Delete one of the bot's own messages (closing the panel). True = ok."""
+        ...
+
+    async def hide_reply_keyboard(self, chat_id: int | str, text: str = "") -> int:
+        """Remove the bottom reply keyboard (closing the menu). Returns message_id."""
+        ...
+
+    async def edit_message_caption(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        caption: str | None = None,
+        buttons: Buttons | None = None,
+    ) -> None:
+        """Edit only the caption/markup of a media message. `buttons=[]`
+        REMOVES the inline keyboard (None keeps the current one)."""
+        ...
+
     async def send_reply_keyboard(
         self,
         chat_id: int | str,

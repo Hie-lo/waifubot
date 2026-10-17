@@ -12,6 +12,8 @@ class FakeGateway:
         self.media_groups: list[tuple] = []
         self.edits: list[tuple] = []
         self.edit_media: list[tuple] = []
+        self.deleted: list[tuple] = []
+        self.hidden_keyboards: list[tuple] = []
         self.fail_mode: str | None = None
 
     def _maybe_fail(self) -> None:
@@ -50,6 +52,25 @@ class FakeGateway:
     async def edit_message(self, chat_id, message_id, text, buttons=None) -> None:  # noqa: ANN001
         self._maybe_fail()
         self.edits.append((chat_id, message_id, text, buttons))
+        # the edited text is what the user SEES now: keep the visible log in
+        # sync so `messages[-1]` is always the current screen
+        self.messages.append((chat_id, text, buttons))
+
+    async def edit_message_caption(self, chat_id, message_id, caption=None,  # noqa: ANN001
+                                   buttons=None) -> None:
+        self._maybe_fail()
+        self.edit_media.append((chat_id, message_id, None, caption, buttons))
+
+    async def delete_message(self, chat_id, message_id):  # noqa: ANN001
+        self._maybe_fail()
+        self.deleted.append((chat_id, message_id))
+        return True
+
+    async def hide_reply_keyboard(self, chat_id, text=""):  # noqa: ANN001
+        self._maybe_fail()
+        self.hidden_keyboards.append((chat_id, text))
+        self.messages.append((chat_id, text, None))
+        return len(self.hidden_keyboards)
 
     async def edit_message_media(self, chat_id, message_id, photo_path,  # noqa: ANN001
                                  caption="", buttons=None) -> None:
@@ -65,11 +86,11 @@ class FakeEnhancer:
 
     def __init__(self, reply: str = "ENHANCED PROMPT (all details preserved)") -> None:
         self.reply = reply
-        self.calls: list[tuple[str, bool, str]] = []
+        self.calls: list[tuple[str, bool]] = []
         self.fail_mode = ""
 
-    async def enhance(self, prompt: str, *, known: bool, model: str = "") -> str:
-        self.calls.append((prompt, known, model))
+    async def enhance(self, prompt: str, *, known: bool) -> str:
+        self.calls.append((prompt, known))
         if self.fail_mode == "error":
             from waifubot.errors import AiError
 

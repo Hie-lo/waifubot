@@ -24,7 +24,7 @@ from telegram import (
     ReplyKeyboardMarkup,
     Update,
 )
-from telegram.error import InvalidToken, NetworkError
+from telegram.error import BadRequest, InvalidToken, NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -95,7 +95,7 @@ class PTBGateway:
         markup = ReplyKeyboardMarkup(
             [[KeyboardButton(label) for label in row] for row in rows],
             resize_keyboard=True,
-            is_persistent=True,
+            is_persistent=False,  # the user can minimize it (user 2026-10-17)
             input_field_placeholder=placeholder or None,
         )
         msg = await self._require().send_message(
@@ -158,9 +158,50 @@ class PTBGateway:
     async def edit_message(
         self, chat_id: int | str, message_id: int, text: str, buttons: object = None
     ) -> None:
-        await self._require().edit_message_text(
-            chat_id=chat_id, message_id=message_id, text=text, reply_markup=_markup(buttons)
+        try:
+            await self._require().edit_message_text(
+                chat_id=chat_id, message_id=message_id, text=text,
+                reply_markup=_markup(buttons),
+            )
+        except BadRequest as e:
+            if "message is not modified" in str(e).lower():
+                return  # identical redraw is a no-op success (panel navigation)
+            raise
+
+    async def edit_message_caption(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        caption: str | None = None,
+        buttons: object = None,
+    ) -> None:
+        try:
+            await self._require().edit_message_caption(
+                chat_id=chat_id, message_id=message_id,
+                caption=(caption if caption is not None else ""),
+                reply_markup=_markup(buttons) if buttons is not None
+                else InlineKeyboardMarkup([]),
+            )
+        except BadRequest as e:
+            if "message is not modified" in str(e).lower():
+                return
+            raise
+
+    async def delete_message(self, chat_id: int | str, message_id: int) -> bool:
+        try:
+            return bool(await self._require().delete_message(
+                chat_id=chat_id, message_id=message_id
+            ))
+        except BadRequest:
+            return False  # too old / already gone
+
+    async def hide_reply_keyboard(self, chat_id: int | str, text: str = "") -> int:
+        from telegram import ReplyKeyboardRemove
+
+        msg = await self._require().send_message(
+            chat_id=chat_id, text=text or " ", reply_markup=ReplyKeyboardRemove()
         )
+        return msg.message_id
 
     async def edit_message_media(
         self,
@@ -185,8 +226,10 @@ class PTBGateway:
 
 
 def _markup(buttons: object) -> object:
+    if buttons is None:
+        return None  # keep the current keyboard on edits
     if not buttons:
-        return None
+        return InlineKeyboardMarkup([])  # explicit empty = REMOVE keyboard
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(label, callback_data=data) for label, data in row]

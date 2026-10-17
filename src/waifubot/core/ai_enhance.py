@@ -33,10 +33,10 @@ ENHANCE_SYSTEM = (
 
 
 class AiEnhancer(Protocol):
-    """What the bot needs: text in, enhanced text out. `model` may override
-    the configured model per call (the admin setting wins at call time)."""
+    """What the bot needs: text in, enhanced text out. The model is fixed at
+    construction (env AI_ENHANCE_MODEL — user rule 2026-10-17: env only)."""
 
-    async def enhance(self, prompt: str, *, known: bool, model: str = "") -> str: ...
+    async def enhance(self, prompt: str, *, known: bool) -> str: ...
 
 
 class AnthropicEnhancer:
@@ -53,7 +53,7 @@ class AnthropicEnhancer:
     def available(self) -> bool:
         return bool(self._api_key)
 
-    async def enhance(self, prompt: str, *, known: bool, model: str = "") -> str:
+    async def enhance(self, prompt: str, *, known: bool) -> str:
         if not self._api_key:
             raise AiError("no API key configured")
         try:
@@ -68,7 +68,7 @@ class AnthropicEnhancer:
         try:
             client = anthropic.AsyncAnthropic(api_key=self._api_key)
             reply = await client.messages.create(
-                model=model or self._model,
+                model=self._model,
                 max_tokens=1024,
                 system=ENHANCE_SYSTEM,
                 messages=[

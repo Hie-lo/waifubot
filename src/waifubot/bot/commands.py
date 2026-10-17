@@ -21,12 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from waifubot.bot.auth import AdminGate
 from waifubot.bot.gateway import Buttons, TelegramGateway
-from waifubot.bot.memory import DialogMemory
+from waifubot.bot.memory import DialogMemory, PanelMemory
 from waifubot.bot.messages import Messages
 from waifubot.bot.posting import publish_group, publish_image, resolve_unknown_send
 from waifubot.bot.worker import GenerationWorker
 from waifubot.config import HARD_MAX_IMAGES_PER_JOB
-from waifubot.core.admin_settings import AdminSettings
+from waifubot.core.admin_settings import SPECS_BY_KEY, AdminSettings
 from waifubot.core.ai_enhance import AiEnhancer
 from waifubot.core.content_safety import validate_adult_identity
 from waifubot.core.identity import (
@@ -96,6 +96,34 @@ class BotApp:
         self._cfg = config
         self._idpool = identity_pool
         self._ai = enhancer
+        self._panels = PanelMemory(sessions)
+
+    # ---- single-message panel (user rule 2026-10-17) ----------------------
+    async def _panel(
+        self, inb: Inbound, text: str, buttons: Buttons | None = None
+    ) -> int:
+        """EVERY menu section renders into ONE message: navigation edits it
+        in place instead of stacking new messages (user 2026-10-17)."""
+        stored = await self._panels.get(inb.user_id)
+        if stored is not None and stored[0] == inb.chat_id:
+            try:
+                await self._gw.edit_message(inb.chat_id, stored[1], text, buttons=buttons)
+                return stored[1]
+            except Exception:  # noqa: BLE001 — deleted/too old -> fresh panel
+                pass
+        msg_id = await self._gw.send_message(inb.chat_id, text, buttons=buttons)
+        await self._panels.set(inb.user_id, inb.chat_id, msg_id)
+        return msg_id
+
+    async def _panel_close(self, inb: Inbound) -> None:
+        """Close the menu entirely: hide the bottom keyboard + delete the panel."""
+        await self._gw.hide_reply_keyboard(
+            inb.chat_id, self._msgs.t("menu_closed")
+        )
+        stored = await self._panels.get(inb.user_id)
+        if stored is not None and stored[0] == inb.chat_id:
+            await self._gw.delete_message(inb.chat_id, stored[1])
+        await self._panels.clear(inb.user_id)
 
     # ---- dispatch ---------------------------------------------------------
     async def handle_message(self, inb: Inbound) -> None:
@@ -119,7 +147,7 @@ class BotApp:
                 await self._dialog_input(inb, dialog)
         except Exception:  # noqa: BLE001 — a bad message must never crash the bot
             log.exception("message failed (text=%s)", (inb.text or "")[:40])
-            await self._gw.send_message(inb.chat_id, self._msgs.t("error_generic"))
+            await self._panel(inb, self._msgs.t("error_generic"))
 
     async def handle_callback(self, inb: Inbound) -> None:
         if not self._gate.allow(inb.user_id):
@@ -157,9 +185,9 @@ class BotApp:
                 await self._cb_publish(inb, data)
             elif data.startswith("res:"):
                 await self._cb_resolve(inb, data)
-            elif data.startswith("set:"):
+            elif data.startswith("set:") or data.startswith("setv:"):
                 await self._cb_setting(inb, data)
-            elif data.startswith("del:"):
+            elif data.startswith("del:") or data.startswith("dely:"):
                 await self._cb_delete(inb, data)
             else:
                 await self._safe_answer(inb)
@@ -178,8 +206,8 @@ class BotApp:
         if cmd == "/menu":
             await self._cmd_menu(inb)
         elif cmd in ("/start", "/help"):
-            await self._gw.send_message(inb.chat_id, self._msgs.t("welcome"))
-            await self._gw.send_message(inb.chat_id, self._msgs.t("help"))
+            await self._panel(inb, self._msgs.t("welcome"))
+            await self._panel(inb, self._msgs.t("help"))
             await self._cmd_menu(inb)  # buttons first: commands as little as possible
         elif cmd == "/status":
             await self._cmd_status(inb)
@@ -197,13 +225,13 @@ class BotApp:
             await self._cmd_settings(inb)
         elif cmd == "/pause":
             await self._worker.pause(source="admin")
-            await self._gw.send_message(inb.chat_id, self._msgs.t("paused"))
+            await self._panel(inb, self._msgs.t("paused"))
         elif cmd == "/resume":
             await self._worker.resume()
         elif cmd == "/characters":
             await self._cmd_characters(inb)
         else:
-            await self._gw.send_message(inb.chat_id, self._msgs.t("help"))
+            await self._panel(inb, self._msgs.t("help"))
 
     async def _cmd_status(self, inb: Inbound) -> None:
         stats = await self._worker.queue_stats()
@@ -213,13 +241,11 @@ class BotApp:
             buttons = [[(self._msgs.t("menu_resume"), "menu:resume")]]
         elif stats.get("pending") or stats.get("running"):
             buttons = [[(self._msgs.t("menu_pause"), "menu:pause")]]
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("status_paused" if paused else "status_running"),
             buttons=buttons,
         )
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t(
                 "status_queue",
                 pending=stats.get("pending", 0),
@@ -247,13 +273,11 @@ class BotApp:
                 )
             ).scalars().all()
         free = shutil.disk_usage(self._cfg.storage_root).free // 1024**3
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("status_counts", jobs=jobs_today, posts=posts_today, disk=f"{free}GB"),
         )
         if last_errors:
-            await self._gw.send_message(
-                inb.chat_id,
+            await self._panel(inb,
                 self._msgs.t("status_last_errors", errors=", ".join(str(e) for e in last_errors)),
             )
 
@@ -264,15 +288,13 @@ class BotApp:
         style_rows.append((self._msgs.t("wiz_random"), "wiz:s:rnd"))
         style_rows.append((self._msgs.t("menu_back"), "menu:back"))
         await self._memory.set(inb.user_id, {"kind": "generate", "step": "style"})
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("wiz_style_ask"), buttons=_chunk(style_rows)
+        await self._panel(inb, self._msgs.t("wiz_style_ask"), buttons=_chunk(style_rows)
         )
 
     async def _cmd_inbox(self, inb: Inbound) -> None:
         ids = await self._scope_ids("inbox")
         if not ids:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("inbox_empty"),
+            await self._panel(inb, self._msgs.t("inbox_empty"),
                 buttons=[[(self._msgs.t("view_back"), "menu:back")]],
             )
             return
@@ -281,8 +303,7 @@ class BotApp:
             [(self._msgs.t("inbox_view"), f"view:inbox:{ids[0]}")],
             [(self._msgs.t("view_back"), "menu:back")],
         ]
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("inbox_summary", count=len(ids)) + "\n" + "\n".join(lines),
             buttons=buttons,
         )
@@ -293,8 +314,7 @@ class BotApp:
                 await s.execute(select(Job).order_by(Job.id.desc()).limit(10))
             ).scalars().all()
         if not jobs:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("queue_empty"),
+            await self._panel(inb, self._msgs.t("queue_empty"),
                 buttons=[[(self._msgs.t("view_back"), "menu:back")]],
             )
             return
@@ -321,13 +341,12 @@ class BotApp:
             )
         buttons.append([(self._msgs.t("queue_refresh"), "menu:queue"),
                         (self._msgs.t("view_back"), "menu:back")])
-        await self._gw.send_message(inb.chat_id, "\n".join(lines), buttons=buttons)
+        await self._panel(inb, "\n".join(lines), buttons=buttons)
 
     async def _cmd_pool(self, inb: Inbound) -> None:
         images = await self._pool_images()
         if not images:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("pool_empty"),
+            await self._panel(inb, self._msgs.t("pool_empty"),
                 buttons=[[(self._msgs.t("view_back"), "menu:back")]],
             )
             return
@@ -341,8 +360,7 @@ class BotApp:
              (self._msgs.t("publish_pick_short"), "menu:publish")],
             [(self._msgs.t("view_back"), "menu:back")],
         ]
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("pool_summary", count=len(images)) + "\n" + "\n".join(lines),
             buttons=buttons,
         )
@@ -362,13 +380,12 @@ class BotApp:
     async def _cmd_publish(self, inb: Inbound) -> None:
         images = await self._pool_images()
         if not images:
-            await self._gw.send_message(inb.chat_id, self._msgs.t("pool_empty"))
+            await self._panel(inb, self._msgs.t("pool_empty"))
             return
         rows = [(self._msgs.t("pool_item", image_id=i.id, status=i.status), f"pub:{i.id}")
                 for i in images]
         rows.append((self._msgs.t("view_back"), "menu:back"))
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("publish_pick"), buttons=_chunk(rows)
+        await self._panel(inb, self._msgs.t("publish_pick"), buttons=_chunk(rows)
         )
 
     async def _cmd_settings(self, inb: Inbound) -> None:
@@ -377,12 +394,12 @@ class BotApp:
             self._msgs.t("settings_item", key=k, value=v)
             for k, v in sorted(values.items())
         ]
-        await self._gw.send_message(inb.chat_id, self._msgs.t("settings_title"))
-        await self._gw.send_message(inb.chat_id, "\n".join(lines))
         rows = [(k, f"set:{k}") for k in sorted(values)]
         rows.append((self._msgs.t("view_back"), "menu:back"))
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("settings_ask_value", key=""), buttons=_chunk(rows)
+        await self._panel(
+            inb,
+            f"{self._msgs.t('settings_title')}\n\n" + "\n".join(lines),
+            buttons=_chunk(rows),
         )
 
     async def _cmd_characters(self, inb: Inbound) -> None:
@@ -394,15 +411,13 @@ class BotApp:
                 )
             ).scalars().all()
         if not rows:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("characters_empty"),
+            await self._panel(inb, self._msgs.t("characters_empty"),
                 buttons=[[(self._msgs.t("view_back"), "menu:back")]],
             )
             return
         list_rows = [(f"👤 {r.name} (v{r.version})", f"char:{r.id}") for r in rows]
         list_rows.append((self._msgs.t("view_back"), "menu:back"))
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("characters_title"), buttons=_chunk(list_rows)
+        await self._panel(inb, self._msgs.t("characters_title"), buttons=_chunk(list_rows)
         )
 
     # ---- one-by-one viewer / NSFW / group post / jobs / characters ---------
@@ -484,12 +499,12 @@ class BotApp:
         payload = await self._viewer_payload(scope, image_id)
         if payload is None:
             if inb.message_id:
-                await self._gw.edit_message(
+                await self._gw.edit_message_caption(
                     inb.chat_id, inb.message_id, self._msgs.t("pool_empty"),
                     buttons=[[(self._msgs.t("view_back"), "menu:back")]],
                 )
             else:
-                await self._gw.send_message(inb.chat_id, self._msgs.t("pool_empty"))
+                await self._panel(inb, self._msgs.t("pool_empty"))
             return
         caption, path_str, buttons = payload
         path = Path(path_str)
@@ -509,8 +524,16 @@ class BotApp:
 
     async def _cb_view(self, inb: Inbound, data: str) -> None:
         parts = data.split(":")
-        if parts[1] == "x":
+        if parts[1] == "x":  # close: remove the viewer buttons in place
             await self._safe_answer(inb)
+            if inb.message_id:
+                try:
+                    await self._gw.edit_message_caption(
+                        inb.chat_id, inb.message_id,
+                        caption=self._msgs.t("viewer_closed"), buttons=[],
+                    )
+                except Exception:  # noqa: BLE001
+                    log.warning("viewer close failed")
             return
         scope, raw_id = parts[1], parts[2]
         await self._safe_answer(inb)
@@ -534,8 +557,7 @@ class BotApp:
             scope = "pool" if status == "approved" else "inbox"
             await self._render_viewer(inb, scope, image_id)
             return
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("nsfw_set" if state else "nsfw_unset", image_id=image_id),
         )
 
@@ -545,7 +567,7 @@ class BotApp:
             ids = await self._scope_ids("pool")
             if len(ids) < 2:
                 await self._safe_answer(inb)
-                await self._gw.send_message(inb.chat_id, self._msgs.t("group_too_few"))
+                await self._panel(inb, self._msgs.t("group_too_few"))
                 return
             dialog = {"kind": "group", "step": "pick", "selected": []}
             await self._memory.set(inb.user_id, dialog)
@@ -581,8 +603,7 @@ class BotApp:
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
             buttons: Buttons = [[(self._msgs.t("group_skip"), "gskip")]]
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("group_caption_ask"), buttons=buttons
+            await self._panel(inb, self._msgs.t("group_caption_ask"), buttons=buttons
             )
         elif data == "gskip":
             dialog["caption"] = ""
@@ -618,7 +639,7 @@ class BotApp:
                 inb.chat_id, dialog["msg_id"], text, buttons=rows
             )
             return dialog["msg_id"]
-        return await self._gw.send_message(inb.chat_id, text, buttons=rows)
+        return await self._panel(inb, text, buttons=rows)
 
     async def _group_confirm(self, inb: Inbound, dialog: dict) -> None:
         dialog["step"] = "confirm"
@@ -628,8 +649,7 @@ class BotApp:
              (self._msgs.t("wiz_cancel"), "wiz:x")],
         ]
         caption = dialog.get("caption") or self._msgs.t("group_skip")
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("group_confirm", count=len(dialog.get("selected") or []))
             + f"\n\n{self._msgs.t('group_caption_label')}: {caption}",
             buttons=buttons,
@@ -638,7 +658,7 @@ class BotApp:
     async def _group_send(self, inb: Inbound, dialog: dict) -> None:
         selected = dialog.get("selected") or []
         if not 2 <= len(selected) <= 10:
-            await self._gw.send_message(inb.chat_id, self._msgs.t("group_too_few"))
+            await self._panel(inb, self._msgs.t("group_too_few"))
             return
         async with self._sessions() as s:
             images = (
@@ -648,7 +668,7 @@ class BotApp:
             images = [i for i in images if i.status == "approved"]
             if len(images) < 2:
                 await s.commit()
-                await self._gw.send_message(inb.chat_id, self._msgs.t("group_too_few"))
+                await self._panel(inb, self._msgs.t("group_too_few"))
                 return
             outcomes = await publish_group(
                 s, self._gw, images=images,
@@ -659,8 +679,7 @@ class BotApp:
             await s.commit()
         await self._memory.clear(inb.user_id)
         sent = sum(1 for o in outcomes if o.status == "sent")
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("group_done", count=len(images), sent=sent)
+        await self._panel(inb, self._msgs.t("group_done", count=len(images), sent=sent)
         )
 
     async def _cb_cancel_job(self, inb: Inbound, data: str) -> None:
@@ -677,7 +696,7 @@ class BotApp:
             await self._safe_answer(inb, self._msgs.t("wiz_stale"))
             return
         await self._safe_answer(inb)
-        await self._gw.send_message(inb.chat_id, self._msgs.t("queue_cancelled", job_id=job_id))
+        await self._panel(inb, self._msgs.t("queue_cancelled", job_id=job_id))
 
     async def _cb_retry_job(self, inb: Inbound, data: str) -> None:
         job_id = int(data.split(":")[1])
@@ -693,8 +712,7 @@ class BotApp:
             await self._safe_answer(inb, self._msgs.t("wiz_stale"))
             return
         await self._safe_answer(inb)
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("job_requeued", job_id=job_id)
+        await self._panel(inb, self._msgs.t("job_requeued", job_id=job_id)
         )
 
     async def _cb_char(self, inb: Inbound, data: str) -> None:
@@ -712,8 +730,7 @@ class BotApp:
             [(self._msgs.t("view_back"), "menu:characters"),
              (self._msgs.t("menu_back"), "menu:back")],
         ]
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t(
                 "char_detail_title", name=row.name, version=row.version
             ) + f"\n\n{row.identity_prompt}",
@@ -734,8 +751,7 @@ class BotApp:
              "character_id": char_id},
         )
         await self._safe_answer(inb)
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("char_using", name=row.name),
         )
         await self._ask_scene(inb)
@@ -746,7 +762,7 @@ class BotApp:
         if part == "x":  # cancel works for ANY dialog (generate, savec, settings)
             await self._memory.clear(inb.user_id)
             await self._safe_answer(inb)
-            await self._gw.send_message(inb.chat_id, self._msgs.t("wiz_cancelled"))
+            await self._panel(inb, self._msgs.t("wiz_cancelled"))
             return
         dialog = await self._memory.get(inb.user_id)
         if not dialog or dialog.get("kind") != "generate":
@@ -773,7 +789,7 @@ class BotApp:
                 dialog["step"] = "identity"
                 await self._memory.set(inb.user_id, dialog)
                 await self._safe_answer(inb)
-                await self._gw.send_message(inb.chat_id, self._msgs.t("wiz_identity_ask"))
+                await self._panel(inb, self._msgs.t("wiz_identity_ask"))
             else:
                 dialog["character_id"] = char_id
                 dialog["step"] = "scene"
@@ -796,8 +812,7 @@ class BotApp:
         elif part == "ai":  # AI-enhance the final prompt (Stage 3)
             await self._safe_answer(inb)
             if not await self._ai_ready():
-                await self._gw.send_message(
-                    inb.chat_id,
+                await self._panel(inb,
                     self._msgs.t("ai_error", error="disabled or not configured"),
                 )
                 return
@@ -816,8 +831,7 @@ class BotApp:
                 (self._msgs.t("ai_undo"), "wiz:aiundo"),
                 (self._msgs.t("wiz_cancel"), "wiz:x"),
             ]]
-            await self._gw.send_message(
-                inb.chat_id,
+            await self._panel(inb,
                 f"{self._msgs.t('ai_enhanced_ask')}\n\n{enhanced}",
                 buttons=buttons,
             )
@@ -829,7 +843,7 @@ class BotApp:
         elif part == "y":
             await self._safe_answer(inb)
             if dialog.get("step") != "confirm":
-                await self._gw.send_message(inb.chat_id, self._msgs.t("wiz_stale"))
+                await self._panel(inb, self._msgs.t("wiz_stale"))
                 return
             await self._confirm_generate(inb, dialog)
 
@@ -845,8 +859,7 @@ class BotApp:
         rows.append((self._msgs.t("wiz_character_oneoff"), "wiz:c:0"))
         rows.append((self._msgs.t("wiz_random"), "wiz:c:-1"))
         rows.append((self._msgs.t("menu_back"), "menu:back"))
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("wiz_character_ask"), buttons=_chunk(rows)
+        await self._panel(inb, self._msgs.t("wiz_character_ask"), buttons=_chunk(rows)
         )
 
     SITE_COUNTS = (2, 4, 6, 8, 16)  # the site produces 2/4/6/8/16/32 (32 > hard max)
@@ -858,8 +871,7 @@ class BotApp:
             [(self._msgs.t("wiz_skip"), "wiz:sk")],
             [(self._msgs.t("menu_back"), "menu:back")],
         ]
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("wiz_scene_ask"), buttons=buttons
+        await self._panel(inb, self._msgs.t("wiz_scene_ask"), buttons=buttons
         )
 
     async def _ask_count(self, inb: Inbound) -> None:
@@ -868,8 +880,7 @@ class BotApp:
         rows = [(str(i), f"wiz:n:{i}") for i in self.SITE_COUNTS]
         rows.append((self._msgs.t("wiz_random"), "wiz:n:rnd"))
         rows.append((self._msgs.t("menu_back"), "menu:back"))
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("wiz_count_ask"), buttons=_chunk(rows)
+        await self._panel(inb, self._msgs.t("wiz_count_ask"), buttons=_chunk(rows)
         )
 
     async def _ai_ready(self) -> bool:
@@ -883,21 +894,20 @@ class BotApp:
     ) -> str | None:
         """Run the fixed-instruction enhancement; None = it failed (user told)."""
         if self._ai is None:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("ai_error", error="not configured")
+            await self._panel(inb, self._msgs.t("ai_error", error="not configured")
             )
             return None
-        model = await self._settings.get_or("ai_enhance_model", "")
         try:
-            return await self._ai.enhance(text, known=known, model=str(model or ""))
+            # the model is an ENV setting only (user rule 2026-10-17) —
+            # never a bot-side input
+            return await self._ai.enhance(text, known=known)
         except AiError as e:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("ai_error", error=str(e))
+            await self._panel(inb, self._msgs.t("ai_error", error=str(e))
             )
             return None
         except Exception:  # noqa: BLE001
             log.exception("ai enhance failed")
-            await self._gw.send_message(inb.chat_id, self._msgs.t("error_generic"))
+            await self._panel(inb, self._msgs.t("error_generic"))
             return None
 
     def _build_identity(self, dialog: dict) -> str:
@@ -926,8 +936,7 @@ class BotApp:
         if await self._ai_ready():
             rows.append((self._msgs.t("ai_enhance"), "wiz:ai"))
         buttons: Buttons = [rows]
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("wiz_confirm_ask"), buttons=buttons
+        await self._panel(inb, self._msgs.t("wiz_confirm_ask"), buttons=buttons
         )
 
     async def _resolve_identity(self, dialog: dict) -> tuple[str, str | None]:
@@ -1011,14 +1020,13 @@ class BotApp:
                 )
                 await s.commit()
             await self._memory.clear(inb.user_id)
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("wiz_created", job_id=job.id)
+            await self._panel(inb, self._msgs.t("wiz_created", job_id=job.id)
             )
         except (ValidationError, ConfigError) as e:
-            await self._gw.send_message(inb.chat_id, str(e))
+            await self._panel(inb, str(e))
         except Exception:  # noqa: BLE001
             log.exception("generate confirm failed")
-            await self._gw.send_message(inb.chat_id, self._msgs.t("error_generic"))
+            await self._panel(inb, self._msgs.t("error_generic"))
 
     async def _dialog_input(self, inb: Inbound, dialog: dict) -> None:
         kind = dialog.get("kind")
@@ -1069,8 +1077,7 @@ class BotApp:
                 buttons=[[(self._msgs.t("view_back"), "menu:back")]],
             )
             return
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t(
                 "review_approved" if approve else "review_rejected", image_id=image_id
             ),
@@ -1128,16 +1135,13 @@ class BotApp:
                 })
             await self._memory.set(inb.user_id, base)
             await self._safe_answer(inb)
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("editc_start", name=row.name)
+            await self._panel(inb, self._msgs.t("editc_start", name=row.name)
             )
             if base["step"] == "known_name":
-                await self._gw.send_message(
-                    inb.chat_id, self._msgs.t("savec_known_name_ask")
+                await self._panel(inb, self._msgs.t("savec_known_name_ask")
                 )
             elif base["step"] == "identity":
-                await self._gw.send_message(
-                    inb.chat_id, self._msgs.t("savec_identity_ask")
+                await self._panel(inb, self._msgs.t("savec_identity_ask")
                 )
             else:
                 await self._ask_trait(inb, base, base["step"].split(":", 1)[1])
@@ -1156,7 +1160,7 @@ class BotApp:
                 inb.user_id,
                 {"kind": "savec", "job_id": job_id, "identity": identity, "step": "name"},
             )
-            await self._gw.send_message(inb.chat_id, self._msgs.t("savec_name_ask"))
+            await self._panel(inb, self._msgs.t("savec_name_ask"))
             return
         if not dialog or dialog.get("kind") not in ("savec", "editc"):
             await self._safe_answer(inb, self._msgs.t("wiz_stale"))
@@ -1176,8 +1180,7 @@ class BotApp:
             dialog["step"] = "known_name"
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("savec_known_name_ask")
+            await self._panel(inb, self._msgs.t("savec_known_name_ask")
             )
         elif action == "j":  # keep this generation's identity, exactly
             dialog["precise"] = False
@@ -1189,7 +1192,7 @@ class BotApp:
             dialog["step"] = "identity"
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
-            await self._gw.send_message(inb.chat_id, self._msgs.t("savec_identity_ask"))
+            await self._panel(inb, self._msgs.t("savec_identity_ask"))
         elif action == "t":  # savec:t:<trait>:<value>
             trait, value = parts[2], ":".join(parts[3:])
             if trait not in TRAIT_ORDER:  # stale/foreign button
@@ -1248,14 +1251,12 @@ class BotApp:
             dialog["step"] = f"trait_custom:{trait}"
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("savec_custom_ask")
+            await self._panel(inb, self._msgs.t("savec_custom_ask")
             )
         elif action == "ai":  # AI-enhance the character prompt
             await self._safe_answer(inb)
             if not await self._ai_ready():
-                await self._gw.send_message(
-                    inb.chat_id,
+                await self._panel(inb,
                     self._msgs.t("ai_error", error="disabled or not configured"),
                 )
                 return
@@ -1307,16 +1308,14 @@ class BotApp:
         ]
         rows.append((self._msgs.t("savec_random_pick"), f"savec:tr:{trait}"))
         rows.append((self._msgs.t("savec_custom"), f"savec:cust:{trait}"))
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t("savec_trait_ask", trait=self._msgs.t(f"trait_{trait}")),
             buttons=_chunk(rows),
         )
 
     async def _ask_extras(self, inb: Inbound) -> None:
         buttons: Buttons = [[(self._msgs.t("savec_skip"), "savec:tx")]]
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("savec_extras_ask"), buttons=buttons
+        await self._panel(inb, self._msgs.t("savec_extras_ask"), buttons=buttons
         )
 
     async def _savec_review(
@@ -1333,8 +1332,7 @@ class BotApp:
                 (self._msgs.t("ai_apply"), "savec:aiok"),
                 (self._msgs.t("ai_undo"), "savec:aiundo"),
             ]]
-            await self._gw.send_message(
-                inb.chat_id,
+            await self._panel(inb,
                 f"{self._msgs.t('ai_enhanced_ask')}\n\n{ai_pending}",
                 buttons=buttons,
             )
@@ -1346,8 +1344,7 @@ class BotApp:
         if await self._ai_ready():
             rows.append((self._msgs.t("ai_enhance"), "savec:ai"))
         buttons = [rows]
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             f"{self._msgs.t('savec_review_ask')}\n\n{dialog['final_identity']}",
             buttons=buttons,
         )
@@ -1359,8 +1356,7 @@ class BotApp:
         try:
             validate_adult_identity(identity, self._cfg.blocklist)
         except ValidationError as e:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("savec_invalid", error=str(e))
+            await self._panel(inb, self._msgs.t("savec_invalid", error=str(e))
             )
             return
         name = dialog.get("name") or "unnamed"
@@ -1397,8 +1393,7 @@ class BotApp:
             await s.commit()
             version = row.version
         await self._memory.clear(inb.user_id)
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("savec_saved", name=name, version=version)
+        await self._panel(inb, self._msgs.t("savec_saved", name=name, version=version)
         )
 
     # ---- interactive main menu (user rule: buttons over commands) ---------
@@ -1446,6 +1441,7 @@ class BotApp:
             rows.append((self._msgs.t("menu_resume"), "menu:resume"))
         elif busy:
             rows.append((self._msgs.t("menu_pause"), "menu:pause"))
+        rows.append((self._msgs.t("menu_close"), "menu:close"))
         # the modern bottom keyboard (Stage 4) — kept BELOW the inline menu
         # so the inline menu stays the last message for the tests/viewers
         await self._gw.send_reply_keyboard(
@@ -1454,14 +1450,19 @@ class BotApp:
             self._main_kb_rows(),
             placeholder=self._msgs.t("kb_placeholder"),
         )
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("menu_title"), buttons=_chunk(rows)
+        await self._panel(inb, self._msgs.t("menu_title"), buttons=_chunk(rows)
         )
 
     async def _cb_menu(self, inb: Inbound, data: str) -> None:
         key = data.split(":", 1)[1]
-        cmd = self.MENU_MAP.get(key)
         await self._safe_answer(inb)
+        if key == "back":  # «منوی اصلی» — was silently dead (debug 2026-10-17)
+            await self._cmd_menu(inb)
+            return
+        if key == "close":  # close the menu: hide keyboard + delete panel
+            await self._panel_close(inb)
+            return
+        cmd = self.MENU_MAP.get(key)
         if cmd is None:
             return
         await self._command(inb, cmd)
@@ -1478,8 +1479,7 @@ class BotApp:
                 [(self._msgs.t("savec_use_job"), "savec:j"),
                  (self._msgs.t("savec_write_own"), "savec:m")],
             ]
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("savec_choose_ask"), buttons=buttons
+            await self._panel(inb, self._msgs.t("savec_choose_ask"), buttons=buttons
             )
             return
         if step == "trait_extras":
@@ -1490,15 +1490,13 @@ class BotApp:
             trait = step.split(":", 1)[1]
             if trait not in TRAIT_ORDER:  # corrupted dialog state
                 await self._memory.clear(inb.user_id)
-                await self._gw.send_message(
-                    inb.chat_id, self._msgs.t("wiz_stale")
+                await self._panel(inb, self._msgs.t("wiz_stale")
                 )
                 return
             try:
                 value = validate_trait_value(trait, text)
             except ValidationError as e:
-                await self._gw.send_message(
-                    inb.chat_id, self._msgs.t("savec_bad_value", error=str(e))
+                await self._panel(inb, self._msgs.t("savec_bad_value", error=str(e))
                 )
                 return
             dialog.setdefault("traits", {})[trait] = value
@@ -1517,8 +1515,7 @@ class BotApp:
             dialog["name"] = text[:100]  # the character's real name
             dialog["step"] = "known_anime"
             await self._memory.set(inb.user_id, dialog)
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("savec_known_anime_ask")
+            await self._panel(inb, self._msgs.t("savec_known_anime_ask")
             )
             return
         if step == "known_anime":
@@ -1556,12 +1553,11 @@ class BotApp:
             await s.commit()
         await self._safe_answer(inb)
         if outcome.status == "sent":
-            await self._gw.send_message(
-                inb.chat_id,
+            await self._panel(inb,
                 self._msgs.t("publish_done", image_id=image_id, message_id=outcome.message_id),
             )
         elif outcome.status == "already":
-            await self._gw.send_message(inb.chat_id, self._msgs.t("publish_already"))
+            await self._panel(inb, self._msgs.t("publish_already"))
         elif outcome.status == "unknown":
             buttons: Buttons = [
                 [
@@ -1569,12 +1565,10 @@ class BotApp:
                     (self._msgs.t("publish_unknown_not"), f"res:{outcome.post.id}:n"),
                 ]
             ]
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("publish_unknown"), buttons=buttons
+            await self._panel(inb, self._msgs.t("publish_unknown"), buttons=buttons
             )
         else:
-            await self._gw.send_message(
-                inb.chat_id,
+            await self._panel(inb,
                 self._msgs.t("publish_failed", error=outcome.error or "unknown"),
             )
 
@@ -1599,8 +1593,7 @@ class BotApp:
             )
             await s.commit()
         await self._safe_answer(inb)
-        await self._gw.send_message(
-            inb.chat_id,
+        await self._panel(inb,
             self._msgs.t(
                 "publish_resolved_sent" if choice == "y" else "publish_resolved_not"
             ),
@@ -1608,11 +1601,39 @@ class BotApp:
 
     # ---- settings / delete ------------------------------------------------
     async def _cb_setting(self, inb: Inbound, data: str) -> None:
+        if data.startswith("setv:"):  # setv:<key>:<value> — a toggle press
+            _, key, raw = data.split(":", 2)
+            try:
+                stored = await self._settings.set(
+                    key, int(raw), updated_by=f"tg:{inb.user_id}"
+                )
+            except (ConfigError, ValueError) as e:
+                await self._safe_answer(
+                    inb, self._msgs.t("settings_invalid", error=str(e))
+                )
+                return
+            await self._safe_answer(inb)
+            await self._panel(
+                inb, self._msgs.t("settings_saved", key=key, value=stored),
+                buttons=[[(self._msgs.t("view_back"), "menu:back")]],
+            )
+            return
         key = data.split(":", 1)[1]
-        await self._memory.set(inb.user_id, {"kind": "set", "key": key})
+        spec = SPECS_BY_KEY.get(key)
         await self._safe_answer(inb)
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("settings_ask_value", key=key)
+        if (spec is not None and spec.kind == "int"
+                and spec.minimum == 0 and spec.maximum == 1):
+            # boolean-like setting: on/off BUTTONS (user rule 2026-10-17 —
+            # never a free-text input for a simple toggle)
+            buttons: Buttons = [[
+                (self._msgs.t("settings_toggle_on"), f"setv:{key}:1"),
+                (self._msgs.t("settings_toggle_off"), f"setv:{key}:0"),
+            ], [(self._msgs.t("view_back"), "menu:back")]]
+            await self._panel(inb, self._msgs.t("settings_toggle_ask", key=key),
+                              buttons=buttons)
+            return
+        await self._memory.set(inb.user_id, {"kind": "set", "key": key})
+        await self._panel(inb, self._msgs.t("settings_ask_value", key=key)
         )
 
     async def _set_input(self, inb: Inbound, dialog: dict, text: str) -> None:
@@ -1624,13 +1645,11 @@ class BotApp:
         try:
             stored = await self._settings.set(key, value, updated_by=f"tg:{inb.user_id}")
         except ConfigError as e:
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("settings_invalid", error=str(e))
+            await self._panel(inb, self._msgs.t("settings_invalid", error=str(e))
             )
             return
         await self._memory.clear(inb.user_id)
-        await self._gw.send_message(
-            inb.chat_id, self._msgs.t("settings_saved", key=key, value=stored)
+        await self._panel(inb, self._msgs.t("settings_saved", key=key, value=stored)
         )
 
     async def _cb_delete(self, inb: Inbound, data: str) -> None:
@@ -1644,8 +1663,7 @@ class BotApp:
                 ]
             ]
             await self._safe_answer(inb)
-            await self._gw.send_message(
-                inb.chat_id, self._msgs.t("delete_ask"), buttons=buttons
+            await self._panel(inb, self._msgs.t("delete_ask"), buttons=buttons
             )
             return
         # dely: hard delete — file + rows (admin-only, confirmed).
@@ -1665,7 +1683,7 @@ class BotApp:
             await s.delete(img)
             await s.commit()
         await self._safe_answer(inb)
-        await self._gw.send_message(inb.chat_id, self._msgs.t("delete_done"))
+        await self._panel(inb, self._msgs.t("delete_done"))
 
 
 def _chunk(rows: list[tuple[str, str]], size: int = 2) -> Buttons:

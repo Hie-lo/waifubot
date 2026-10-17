@@ -832,7 +832,7 @@ def test_stage3_ai_enhance_buttons(env: Env) -> None:
         assert any("هوش مصنوعی" in lab for lab in labels)  # enhance button shown
         await env.app.handle_callback(env.cb("savec:ai", update_id=30))
         assert env.ai.calls, "enhancer must be called"
-        prompt_seen, known_seen, _m = env.ai.calls[-1]
+        prompt_seen, known_seen = env.ai.calls[-1]
         assert "24" in prompt_seen and "red ribbon" in prompt_seen  # details kept
         assert known_seen is False  # not a known-character dialog
         cmp_msg = env.gw.messages[-1]
@@ -857,7 +857,7 @@ def test_stage3_ai_enhance_buttons(env: Env) -> None:
         labels = [b[1] for row in (conf_msg[2] or []) for b in row]
         assert "wiz:ai" in labels  # enhance button on the final confirm
         await env.app.handle_callback(env.cb("wiz:ai", update_id=46))
-        prompt_seen, known_seen, _m = env.ai.calls[-1]
+        prompt_seen, known_seen = env.ai.calls[-1]
         assert "glowing eyes" in prompt_seen and "on a rooftop" in prompt_seen
         assert known_seen is False
         await env.app.handle_callback(env.cb("wiz:y", update_id=47))
@@ -889,7 +889,7 @@ def test_stage3_ai_enhance_buttons(env: Env) -> None:
         await env.app.handle_message(env.msg("Rem", update_id=63))
         await env.app.handle_message(env.msg("Re:Zero", update_id=64))
         await env.app.handle_callback(env.cb("savec:ai", update_id=65))
-        _p, known_seen, _m = env.ai.calls[-1]
+        _p, known_seen = env.ai.calls[-1]
         assert known_seen is True
 
         # ---- AI failure is reported, dialog survives --------------------
@@ -1131,5 +1131,98 @@ def test_provider_crash_never_strands_a_job(env: Env) -> None:
             await s.commit()
         assert job.status == "failed"
         assert any(str(job_id) in m[1] for m in env.gw.messages)  # job_failed_notice
+
+    _run(body())
+
+
+def test_menu_navigation_fixes_and_single_panel(env: Env) -> None:
+    """User bug report 2026-10-17: main-menu button dead, close buttons dead,
+    delete confirm dead, every section sent a NEW message. All fixed: one
+    panel message for the whole menu, working back/close, working delete."""
+
+    async def body() -> None:
+        from waifubot.db.models import Image, Job, Setting
+
+        # ---- single panel: sections EDITS the same message ----------------
+        await env.app.handle_message(env.msg("/menu", update_id=1))
+        await env.app.handle_callback(env.cb("menu:queue", update_id=2))
+        await env.app.handle_callback(env.cb("menu:pool", update_id=3))
+        await env.app.handle_callback(env.cb("menu:characters", update_id=4))
+        # navigation must come from EDITS of one message, not new sends
+        assert len(env.gw.edits) >= 3
+        edit_ids = {e[1] for e in env.gw.edits}
+        assert len(edit_ids) == 1, f"panel must be ONE message: {edit_ids}"
+        # the Fake keeps the visible log in sync; the panel id never changed
+        async with env.factory() as s:
+            row = await s.get(Setting, f"panel:{ADMIN_ID}")
+            await s.commit()
+        assert row is not None
+
+        # ---- «منوی اصلی» (menu:back) actually works ----------------------
+        await env.app.handle_callback(env.cb("menu:back", update_id=5))
+        last = env.gw.messages[-1]
+        assert any("ساخت" in b[0] for row in (last[2] or []) for b in row)
+
+        # ---- menu:close hides the keyboard + deletes the panel -----------
+        await env.app.handle_callback(env.cb("menu:close", update_id=6))
+        assert env.gw.hidden_keyboards, "bottom keyboard must be hidden"
+        assert env.gw.deleted, "the panel message must be deleted"
+        async with env.factory() as s:
+            row = await s.get(Setting, f"panel:{ADMIN_ID}")
+            await s.commit()
+        assert row is None  # panel forgotten -> next /menu makes a fresh one
+
+        # ---- delete confirmation (dely:) is routed and works -------------
+        async with env.factory() as s:
+            s.add(Job(status="failed", idempotency_key="d1", prompt_snapshot="p",
+                      template_version="t", filters_json="{}"))
+            await s.commit()
+        from tests.unit.test_bot_units import _make_image
+
+        store = env.tmp_path / "storage"
+        async with env.factory() as s:
+            img_a = _make_image(store, 1, file_path="images/x.png", status="approved")
+            s.add(img_a)
+            await s.commit()
+            img_id = img_a.id
+        await env.app.handle_callback(env.cb(f"del:{img_id}", update_id=7))
+        ask = env.gw.messages[-1]
+        assert any(f"dely:{img_id}" == b[1] for row in (ask[2] or []) for b in row)
+        await env.app.handle_callback(env.cb(f"dely:{img_id}", update_id=8))
+        async with env.factory() as s:
+            img = await s.get(Image, img_id)
+            await s.commit()
+        assert img is None  # hard delete worked (dely: is routed now)
+
+        # ---- viewer close (view:x) removes the viewer buttons ------------
+        async with env.factory() as s:
+            img_b = _make_image(store, 1, file_path="images/y.png", status="approved")
+            s.add(img_b)
+            await s.commit()
+            img2_id = img_b.id
+        inb = env.cb(f"nsfw:{img2_id}", update_id=10)  # toggle edits the caption
+        inb.message_id = 77  # the viewer message the button lives on
+        await env.app.handle_callback(inb)
+        close = env.cb("view:x", update_id=11)
+        close.message_id = 77
+        await env.app.handle_callback(close)
+        last_edit = env.gw.edit_media[-1]
+        assert last_edit[1] == 77 and last_edit[4] == []  # buttons stripped
+
+        # ---- ai_enhance_enabled is a TOGGLE, model is gone ----------------
+        await env.app.handle_message(env.msg("/settings", update_id=20))
+        labels = [b[1] for row in (env.gw.messages[-1][2] or []) for b in row]
+        assert "set:ai_enhance_enabled" in labels
+        assert not any("ai_enhance_model" in lab for lab in labels)  # env-only
+        await env.app.handle_callback(env.cb("set:ai_enhance_enabled", update_id=21))
+        toggle = env.gw.messages[-1]
+        tlabels = [b[1] for row in (toggle[2] or []) for b in row]
+        assert "setv:ai_enhance_enabled:1" in tlabels
+        assert "setv:ai_enhance_enabled:0" in tlabels  # buttons, not text input
+        await env.app.handle_callback(env.cb("setv:ai_enhance_enabled:0", update_id=22))
+        async with env.factory() as s:
+            row = await s.get(Setting, "ai_enhance_enabled")
+            await s.commit()
+        assert row is not None and row.value_json == "0"
 
     _run(body())
