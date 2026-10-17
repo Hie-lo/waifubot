@@ -57,6 +57,7 @@ Manual measurement (no live provider in CI): run the mock provider with 1/2/3/4 
 - [ ] Per-admin lock, instant `answer_callback_query`, panel versions, edit-failure fallback (R40); panel key by `(admin, chat)`
 - [ ] Rate limiter + flood-wait handling (R42); `file_id` cache
 - [ ] Wizard state: versioned pydantic state with TTL in `user_memory`
+- [ ] Special Character Studio wizard in `bot/handlers/generate.py`: click-only preset composition (R16B) mirroring Vision Lab `sync()` contract
 
 Real test: `python -m pytest tests/test_bot_flow.py tests/unit/test_callbacks_registry.py tests/unit/test_panel_engine.py -q`
 
@@ -67,6 +68,7 @@ Real test: `python -m pytest tests/test_bot_flow.py tests/unit/test_callbacks_re
 - [ ] pHash + `near_duplicate` reject reason; `phash_distance` setting
 - [ ] Record provenance (R43)
 - [ ] `identity.py`/UI: `character_id`, `version`, `is_current`
+- [ ] Vision Lab preset catalog integration: `config/vision_lab_presets.yaml` (114 characters + 11 option categories)
 
 Real test: `python -m pytest tests/unit/test_image_pipeline.py tests/unit/test_identity.py tests/unit/test_alembic.py -q`
 

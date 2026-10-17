@@ -28,7 +28,7 @@ waifubot/
 ├── .github/workflows/ci.yml          ← ruff, pyright, import-linter, pytest
 ├── alembic/versions/                 ← 0001…0004 existing; 0005… see §6
 ├── config/
-│   ├── blocklist.yaml  identity_pool.yaml  tags_pool.yaml
+│   ├── blocklist.yaml  identity_pool.yaml  tags_pool.yaml  vision_lab_presets.yaml
 │   └── providers/  mock.yaml  perchance.yaml     (incl. provider_concurrency)
 ├── docs/
 │   ├── adr/  0001…0005
@@ -152,8 +152,10 @@ Key points:
 
 ```
 bottom-keyboard press (NEW panel) / inline (EDIT panel, per-admin lock)
-  → wizard (style → character/prompt → enhance? → flags → count → NSFW → confirm)
-       enhance → Enhancer adapter → safety re-check (R39) → prompt
+  ├── Path A (Special Character Studio, R16B):
+  │     select from 114 characters → outfit → pose → expr → location → camera → style (click-only sync)
+  └── Path B (Custom Wizard, R15):
+        style → character/prompt → enhance? → flags → count → NSFW → confirm
   → services.generation.create_job (prompt+style, flags, count N, kind, job_type)
   → WorkerPool claims (atomic, leased) → ProviderSlotPool.acquire()
   → provider.generate(needed = N − kept, slot)                       [R9, R10, R35]
