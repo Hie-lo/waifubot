@@ -1,0 +1,93 @@
+[project]
+name = "waifubot"
+version = "4.1.0"
+description = "Multi-admin/user Telegram anime generation and character companion bot"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "python-telegram-bot[job-queue]>=21.0",
+    "pydantic>=2.6",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "alembic>=1.13",
+    "playwright>=1.42",
+    "httpx>=0.27",
+    "anthropic>=0.25",
+    "pillow>=10.2",
+    "imagehash>=4.3",
+    "structlog>=24.1",
+    "tenacity>=8.2",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6.98",
+    "ruff>=0.3",
+    "pyright>=1.1",
+    "import-linter>=2.0",
+    "pre-commit>=3.6",
+]
+
+[project.scripts]
+waifubot = "waifubot.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "basic"
+pythonVersion = "3.13"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.importlinter]
+root_package = "waifubot"
+
+[[tool.importlinter.contracts]]
+name = "Core domain isolation"
+type = "forbidden"
+source_modules = ["waifubot.core"]
+forbidden_modules = [
+    "waifubot.adapters",
+    "waifubot.db",
+    "waifubot.services",
+    "waifubot.bot",
+    "telegram",
+    "sqlalchemy",
+    "playwright",
+    "httpx",
+    "anthropic",
+]
+
+[[tool.importlinter.contracts]]
+name = "Services layer isolation"
+type = "forbidden"
+source_modules = ["waifubot.services"]
+forbidden_modules = [
+    "waifubot.bot",
+    "telegram",
+]
+
+[[tool.importlinter.contracts]]
+name = "Adapters layer isolation"
+type = "forbidden"
+source_modules = ["waifubot.adapters"]
+forbidden_modules = [
+    "waifubot.bot",
+    "waifubot.services",
+]
