@@ -9,7 +9,6 @@ Contract:
 import time
 from typing import Any
 
-import psutil
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,12 +44,28 @@ def format_uptime(seconds: float) -> str:
 
 
 def get_free_ram_mb() -> int:
-    """Returns available system RAM in megabytes."""
+    """Returns available system RAM in megabytes without requiring external dependencies."""
+    # 1. Try psutil if installed
     try:
+        import psutil
+
         vm = psutil.virtual_memory()
         return int(vm.available // (1024 * 1024))
+    except (ImportError, Exception):
+        pass
+
+    # 2. Try Linux /proc/meminfo (zero dependencies on Linux/WSL)
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb // 1024
     except Exception:
-        return 1024
+        pass
+
+    # 3. Fallback
+    return 1024
 
 
 async def collect_system_status(
