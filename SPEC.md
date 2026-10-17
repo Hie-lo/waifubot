@@ -1,385 +1,307 @@
-# WaifuBot — Specification v3.1
+# WaifuBot — Specification v4.0
 
-**Product:** a single-admin Telegram bot (Persian UI) that generates SFW anime character images through a replaceable provider, lets the admin curate them, and publishes approved images to one configured channel, manually or on a schedule.
+**Product:** a multi-admin Telegram bot (Persian-first UI, full English locale) that generates anime character images through replaceable anti-captcha providers, lets admins curate them into a pool, and publishes approved images — directly to channels, as albums to groups, or on a schedule from the pool. It carries a character-identity system (appearance facts separate from scenes), an AI-enhance step for prompts, and NSFW support with spoilers.
 
-**Environment (initial):** Debian on WSL2, 16 GB RAM, Intel i5-12400, no usable GPU inside WSL.
+**Environment:** Debian on WSL2, 16 GB RAM, Intel i5-12400, no usable GPU inside WSL (upgradeable).
 
-**Companion file:** `AGENT.md` holds the working rules. This file holds what to build.
+**Status:** this document is the single source of truth for *what the product is and how the code is organized*. It supersedes **Specification v3.1** (archived verbatim at `docs/SPEC-v3.1-archive.md`; git history keeps everything else).
 
-**How to read this document:** numbers marked *starting default* are guesses to be tuned after measurement, not rules. Items marked **[VERIFY]** are external facts written from memory that must be checked against official documentation or a real test before the code depends on them.
+> **Golden rule:** the user's word supersedes this file. When a live instruction contradicts anything here, follow the instruction and report the conflict in the delivery report.
+
+*How to read:* numbers marked *starting default* are tunable guesses. **[VERIFY]** marks external facts that must be checked before code depends on them.
 
 ---
 
-## 1. Goal, scope, and success
+## 1. Product, roles, scope
 
 ### 1.1 Core workflow
 
-`generate a batch (e.g. 4 images) → admin reviews → approved images enter a pool → published manually, or by the scheduler from the pool only`
+```
+user scene + character data → prompt (+ optional AI enhance) → job
+→ provider generates an EXACT image count → pipeline validates → admin reviews
+→ approved images enter the pool → published (direct / album / schedule)
+```
 
 Approval happens once per image, at review time. Nothing unreviewed is ever published, including by the scheduler.
 
-### 1.2 In scope for the MVP
+### 1.2 Roles
 
-- A replaceable image-provider interface; the Perchance text-to-image page is the first candidate, not a permanent dependency.
-- Deterministic, free prompt construction from templates and preset pools.
-- Stored characters with a fixed written identity, separate from scene choices.
-- Image extraction, validation, hashing, and atomic storage.
-- A Telegram admin flow: generate, review, approve or reject, save character, publish.
-- A durable job queue, then a scheduler that only enqueues and posts from the approved pool.
-- Persian UI strings from `locales/fa.yaml`.
-- Logs, safe errors, disk limits, and recovery procedures.
+| Role | Powers |
+|---|---|
+| **superadmin** | everything + admin management + admin-settings panel |
+| **admin** | generate, review, pool, publish, characters, queue, settings, scheduler |
+| **user** | start/help only |
 
-### 1.3 Out of scope (until separately approved)
+Admins are stored in the DB (`is_superadmin`); env `ADMIN_IDS` seeds them at startup. `/manage` is the hub; every item is button-driven.
 
-Conversational characters, per-user memory, images generated from chat, public multi-user access, payments or paywalls, NSFW, model training or a local diffusion model, automatic image scoring, a web dashboard, and Ollama or any LLM in the prompt path.
+### 1.3 In scope
 
-### 1.4 MVP success criteria (the user should confirm or change these)
+Provider abstraction (mock + Perchance now; Zovla/pixai and OnlyWaifus later), prompt building from character facts + user scene, image pipeline (validation, hashing, atomic storage), full Telegram admin UX, job queue with workers and exact-count enforcement, pool + direct + scheduled publishing (channels and group albums), character identity system with versioning, AI-enhance step, NSFW handling with spoilers, durable state (SQLite + Alembic), Persian/English locales, logs, safe errors, recovery, anti-captcha policy.
 
-The MVP is worth continuing only if, in the pilot, all hold:
+### 1.4 Out of scope (for now)
 
-- At least 70% of generation jobs produce one or more images that pass validation (*starting default*).
-- At least 1 in 4 generated images is judged postable by the admin (*starting default*).
-- Curation takes the admin no more than about 10 minutes per day at the target posting rate (*starting default*).
-- The bot runs unattended for the pilot period without runaway generation, duplicate posts, or disk growth.
-
-If these fail, the likely cause is the provider or the consistency approach, and the decision is to change the provider, not to add features.
+Web admin panel (path reserved), paid NSFW channel button (marked **بعداً**), AI captions for albums (typed captions now), multi-provider routing/retries, automatic challenge solving (explicitly forbidden — see §2.7).
 
 ---
 
-## 2. Assumptions to verify before building on them
+## 2. Current rules (2026-10-17) — the contract
 
-| # | Assumption | Why it matters | How to verify |
-|---|---|---|---|
-| A1 | Perchance support's written approval covers this page, this automation method, this rate, and visible or headless mode | Everything depends on it | The user supplies the written reply; the agent records a non-sensitive summary in `docs/provider-permission.md` |
-| A2 | A visible Chromium window opens inside WSL2 (WSLg) | The proof-of-concept uses a visible browser | Sprint 0 check: confirm `DISPLAY` and that a window actually opens |
-| A3 | Headless operation is permitted and works | A server deployment has no display | Only if A1 allows it; test separately after approval |
-| A4 | WSL2 memory limit leaves room for Chromium plus Python | Default limits are a fraction of host RAM **[VERIFY]** | Measure peak RAM in Sprint 0; set the limit deliberately in `.wslconfig` |
-| A5 | Telegram limits: photo about 10 MB, width plus height at most 10,000, aspect ratio at most 20:1, caption at most 1,024 characters, `callback_data` at most 64 bytes | Publishing and callbacks must respect them | **[VERIFY]** against the current Bot API documentation |
-| A6 | Library APIs: `python-telegram-bot` lifecycle hooks, SQLAlchemy 2.x async, Playwright async, APScheduler stable major | Wrong version examples cause subtle bugs | **[VERIFY]**; pin tested versions and follow the installed version's documentation |
-| A7 | Perchance's terms allow publishing generated images to a public channel | Redistribution can differ from personal use | **[VERIFY]** in the provider's terms and the support reply |
-| A8 | The provider's real output behavior: single final result or progressive images, formats, whether it returns a seed or accepts negative prompts | Shapes the provider interface and schema | Sprint 0 spike report |
+These are binding behavior rules. Every change must preserve them; the review pass checks them.
 
----
+### 2.1 UI & navigation
 
-## 3. Provider rules
+- **R1 — Interactive-first.** Every action is a button/menu where possible; typed input only where the user must type (prompts, names, captions, scenes). Toggles are buttons, never "type 1/0".
+- **R2 — Bottom keyboard = sections.** The persistent reply keyboard holds the main sections (labels from locales; main buttons live in the bottom keyboard area). Pressing a bottom button — or typing a command — **starts a NEW panel message** under the user's message (the press is visible chat activity; the answer must sit right under it).
+- **R3 — One panel per menu.** Every interaction *inside* a menu (inline buttons, wizard steps, typed dialog answers) **edits the same panel message in place** — never a new message. Tracked in `PanelMemory` (`settings.panel:<admin_id>` → JSON `[chat_id, message_id]`).
+- **R4 — Back & close.** Every screen except the main menu has a working **back** button (to the previous level); every panel has a **close** button (deletes the panel message, hides the reply keyboard). The main reply keyboard is non-persistent (`is_persistent=False`).
+- **R5 — Viewer edits in place.** Pool and inbox viewers: prev/next/toggles **edit the same message** (`edit_message_media` / `edit_message_caption`); closing strips the buttons and leaves the photo. Never a new photo per navigation press.
+- **R6 — Fast typing.** A new typed prompt while a wizard is open silently abandons the old wizard and starts fresh with the new text (long prompts supported).
+- **R7 — No dead ends.** Every rejection/error is explained (locale text) with an actionable button when one exists.
+- **R8 — Callback audit.** Every callback prefix is routed (review-pass audit: 72/72 today); callback data ≤ 64 bytes.
 
-- The existing Playwright proof-of-concept is a **reference only**. The agent reads it, never runs it, until Sprint 0 is approved. Its known weaknesses in `SPEC.md` section 9.3 come from the blueprint author's description; the agent must confirm each against the real script before relying on the list.
-- Respect the actual scope of the provider's permission. Do not assume permission for another page, a higher rate, headless mode, commercial use, or public redistribution unless the written reply covers it.
-- On a CAPTCHA, challenge, rate limit, or access-denied page, stop and notify the admin. Do not circumvent.
-- Site-specific selectors live in one adapter module. Selectors are a baseline to verify, never an assumption.
-- Live provider checks are manual and opt-in, kept in `tests/manual/`. CI uses the mock provider only.
-- If the provider is a no-go (section 14, Sprint 0), the replacement shortlist is judged on: automation or API permission, terms for public posting and commercial use, rate limits, output quality for anime styles, seed or reference-image support, and cost. Verify current terms and limits for each before choosing; do not assume any candidate is acceptable.
+### 2.2 Generation & image counts
 
----
+- **R9 — Exact counts.** Supported counts are exactly the site's options **2/4/6/8/16** (`SITE_COUNTS`). A job succeeds **only when exactly N images exist**. A short batch never silently succeeds:
+  - pipeline rejects (malformed/oversized/duplicate bytes) and slow-partial provider batches count as **undercount**;
+  - `error_code = partial_count` (or `no_valid_images` when zero) with a summary line (`undercount: got/need (rejected: …)`);
+  - **already-produced images are kept** and shown;
+  - an automatic **top-up requeue** requests only the missing count (`needed = N - already`) and continues until exactly N — this is the default path (site glitches self-heal);
+  - when attempts run out: `failed` + retry button; the manual retry resets `attempt_count` and keeps topping up.
+- **R10 — No stale gallery images.** Before clicking generate, the provider snapshots the page gallery; any pre-existing image URL is excluded from the new batch's collection (cross-attempt and cross-job).
+- **R11 — Pipeline is not allowed to shrink the contract.** Everything the filter drops is accounted for at the job gate (R9).
+- **R12 — Retry + notify.** Failed/partial jobs retry up to configured attempts with `RETRY_BACKOFF_SECONDS` backoff; job completion/failure always notifies (admin(s)).
+- **R13 — Interruptions announced.** On startup, recovered interrupted jobs are announced to admins (`interrupted_notice` per job).
 
-## 4. Architecture
+### 2.3 Characters & identity
 
-**Stack:** Python (record the exact version in the README), `python-telegram-bot` async, Playwright **async** API, SQLAlchemy 2.x async with `aiosqlite`, Alembic from the first schema, Pillow for validation, `pytest`, `ruff`. APScheduler is added only in Sprint 4, pinned to the stable major version actually installed. **[VERIFY]**
+- **R14 — Character data = appearance facts ONLY:** name, anime, age (18+), height, hair/eye/skin color, face shape, body type, body-part sizes (NSFW). No actions, expressions, poses, clothes, or scenes in character data.
+- **R15 — Scene at generation.** The user types the scene/action per generation; prompt build combines **facts first, scene after** (facts override templates, never the reverse).
+- **R16 — Known characters.** The user types name + anime (example provided in the dialog); AI-enhance may append canonical details.
+- **R17 — Save button policy.** The "save character" button appears **only** on generated-image jobs. Jobs generated *from* a saved character must never show it.
+- **R18 — Edit = new version.** Editing a saved character creates a new row (`edit_of`, parent link, label "نسخه N"); the previous version stays alive and linked.
+- **R19 — My-characters screen** lists all characters with version info; create/edit are full button flows with confirmation and back buttons.
 
-**Process model:** one process, one event loop. The Telegram `Application` owns the loop. The generation worker is a single asyncio task started in the application's post-init hook and stopped in its post-shutdown hook. Handlers only write jobs and read state; they never touch the browser or the provider.
+### 2.4 AI enhance
 
-**Concurrency:** exactly one generation at a time. One database session per unit of work, never shared between tasks. Use `to_thread` only for genuinely blocking work such as Pillow on large images.
+- **R20 — Both confirmations.** The "🪄 AI Enhance" button appears at the **character-prompt confirm** *and* the **final-prompt confirm**. Enhancement must preserve every user detail (style, flags, subject, scene) and only add: canonical details for known characters (name + anime given), nothing for unknown ones.
+- **R21 — Model is env-only.** `ai_enhance_enabled` is a 0/1 toggle button in the bot settings; **`ai_enhance_model` is not a bot setting at all** — it is read from `AI_ENHANCE_MODEL` (Claude models; Haiku recommended). Same for `ANTHROPIC_API_KEY`.
 
-**Browser rules:**
+### 2.5 NSFW & publishing
 
-- Async Playwright only; never mix it with the sync API in one lifecycle.
-- Explicit timeouts on every operation; prefer locator auto-waiting over sleeps.
-- Plain fill and click first. Forced clicks and character-by-character typing only if a controlled test proves they are required and the permission scope allows it.
-- No bare exception swallowing; every failure gets a category.
-- Restart the browser after a number of jobs (*starting default*: 10) and after any error, to contain memory growth.
-- Cancelling an asyncio task is not proof that the browser operation stopped; rely on the provider's own timeout and cleanup.
+- **R22 — NSFW per generation**, toggle button + checkbox confirmation; NSFW images post with a spoiler (`has_spoiler=True`); a mixed album may contain spoiler and non-spoiler images together (spoiler is per-image).
+- **R23 — Group albums:** 2–10 images per album, typed caption (AI captions later), group/topic picker, per-image delete with live count, split preview when > 10.
+- **R24 — Publish errors are user-visible** (`publish_too_large` with guidance; `publish_failed` on API failure).
 
-**Deployment reality:**
+### 2.6 Settings & safety
 
-- Development runs on WSL2. WSL is not an always-on host; the bot stops when the PC sleeps or WSL shuts down. Document this.
-- A server deployment has no display, so it needs headless operation. That depends on assumptions A1 and A3. If headless is not permitted, an always-on deployment is not possible with this provider, and that is a reason to change provider, not to hide the browser.
-- Treat the always-on question as an explicit decision at the end of the pilot.
+- **R25 — Everything is changeable in the bot.** The settings panel exposes every runtime knob; `.env` supplies *defaults and operational secrets only*. Code-level **safety ceilings** (max concurrent jobs 20, workers 100) bound user input. Values save on change and apply immediately (workers re-read settings per iteration).
+- **R26 — Content policy.** The site has no adult restriction, so **none is imposed**. **Minor protection stays:** blocklist + rejection of any prompt that states a minor age — including "age 17"/"aged 17" — + numeric age validation ≥ 18 (character traits).
+- **R27 — No silent dead ends.** Unauthorized actions answer with `not_authorized` (not silence).
 
-**Settings and secrets:**
+### 2.7 Anti-captcha & challenges
 
-- Secrets and hard limits come from environment variables: bot token, admin IDs, provider enabled, NSFW disabled, maximums, destination chat ID.
-- Admin-tunable values (posting interval, daily cap, images per job, default style, retention) live in the `settings` table, each with a code-defined type, range, and default.
-- A database value can never override a hard limit or enable a disabled provider.
-- `.env.example` contains placeholders only.
+- **R28 — Never solve challenges.** Perchance options (solve 1×, enable 1×, solve+enable) are offered first; the challenge window opens **only** for an actual challenge (reuse the same single window/tab); the human hover-checkbox is the **last fallback**; a failed challenge stops with a retry button. No automated puzzle/text challenge solving, ever. **Playwright async API only.** Provider sessions are reused.
 
----
+### 2.8 Engineering process
 
-## 5. Data model (5 tables)
-
-UTC timestamps everywhere; local time only in the UI. Foreign keys enabled. Add indexes only where listed.
-
-**`characters`** — `id`, `name`, `identity_prompt` (fixed visual identity), `style_lock`, `version`, `parent_id` (previous version, nullable), `is_active`, `created_at`.
-Identity text is immutable per row. A change creates a new row pointing to its parent.
-
-**`jobs`** (durable queue) — `id`, `status` (`pending`, `running`, `succeeded`, `failed`, `cancelled`), `priority` (manual 1, scheduled 10), `filters_json` (request snapshot), `prompt_snapshot`, `template_version`, `character_id` (nullable), `requested_by`, `idempotency_key` (unique), `attempt_count`, `max_attempts`, `next_attempt_at`, `error_code`, `error_summary` (no secrets), `created_at`, `started_at`, `finished_at`.
-Index on `(status, priority, created_at, id)`.
-
-**`images`** — `id`, `job_id`, `character_id` (nullable), `provider`, `file_path` (relative, under managed storage), `mime_type`, `width`, `height`, `file_size`, `sha256`, `status` (`pending_review`, `approved`, `rejected`, `published`, `missing`), `seed` (nullable; stored only if the provider genuinely returns it), `created_at`.
-Index on `sha256`; unique per job.
-
-**`posts`** — `id`, `image_id`, `chat_id`, `telegram_message_id` (nullable), `status` (`pending`, `sent`, `failed`, `unknown`), `attempt_count`, `last_error`, `created_at`, `sent_at`.
-Unique on `(image_id, chat_id)`. The destination comes from configuration.
-
-**`settings`** — `key`, `value_json`, `updated_at`, `updated_by`.
-
-**Deliberately not in the MVP:** a `destinations` table (one channel in config), `character_references` (add when the provider supports reference images), `admin_audit` (structured logs cover a single admin), and content-rating columns (everything is SFW).
-
-**Design notes:**
-
-- Provider-dependent fields (`seed`, dimensions, formats) are nullable or derived from validated files, so the schema does not assume what the provider returns. Sprint 0 findings are applied before the schema is frozen.
-- Deduplication by SHA-256 only prevents re-collecting the same image while polling one page in one job. Separate generations are almost never byte-identical, so it does not detect similar images. Perceptual hashing is a later option.
+- **R29 — User word supersedes files** (report the conflict).
+- **R30 — One sprint/stage at a time**; short plain-Persian report with a real-test command; **STOP** until approval; large work is split into checklists; minimal error probability over speed.
+- **R31 — Review pass after every stage:** dead code, unused locale keys, unrouted callbacks, count semantics, secret scan, tests green.
+- **R32 — No live provider runs** in tests/CI (only via explicit `--confirm-live`); Playwright async everywhere.
+- **R33 — Locale parity:** Persian-first, complete English; `REQUIRED_KEYS` subset enforced by tests for both files.
 
 ---
 
-## 6. Prompt engine and character identity
+## 3. Project architecture (the path)
 
-**Deterministic and free.** No paid API, no LLM.
+### 3.1 Principles
 
-Flow: load character version → load style lock → select compatible presets (admin-chosen or weighted random) → validate combinations → render the provider-specific template → run content checks (section 8) → store the exact prompt, preset IDs, and template version in the job.
+1. **Layered, inward dependencies.** `bot` (delivery) → `services` (application) → `core` (domain). Infrastructure (`db`, provider adapters, future `web`) implements domain ports. Nothing in `core` imports the Telegram framework or SQLAlchemy.
+2. **Ports & adapters.** `GenerationProvider` (core/providers/base) is the provider port; `BotGateway` (bot/gateway) is the Telegram port; `PromptBuilder` is pure; tests plug fakes of each (tests/fakes.py). New providers = new adapters + a `config/providers/*.yaml` — zero core changes.
+3. **Async end-to-end.** asyncio + async SQLAlchemy + async Playwright (`PLAYWRIGHT_ASYNC_API=1`). One session per unit of work (`session_scope`); long provider runs never block the bot loop.
+4. **Config split.** `env` = defaults + operational secrets (tokens, `AI_ENHANCE_MODEL`, limits). DB `settings` = runtime knobs (R25). Code ceilings bound both.
+5. **State durability.** Every flow can resume: DB jobs + images, `user_memory` (wizard state), `settings` (panel coordinates, scheduler state). Recovery is a first-class module (bot/recovery.py) and announces itself (R13).
+6. **Tests mirror the architecture** (§5): fakes as adapters, contract tests per service, one end-to-end bot flow harness.
 
-**Presets** live in `config/tags_pool.yaml`: stable IDs, labels, prompt fragments, optional provider mappings, compatibility lists, optional weights. Malformed YAML fails loudly at startup and never falls back silently. Labels are localizable; prompt fragments need not be Persian.
+### 3.2 Project tree (current — v4.0)
 
-**Prompt structure:** fixed identity, then fixed style, then variable scene (pose, expression, outfit, background, camera, lighting), then provider-supported quality constraints. Wording is adapted to the provider after Sprint 0 shows which fields it supports.
+```
+waifubot/
+├── SPEC.md                       ← this file (single source of truth)
+├── AGENT.md                      ← working rules for agents/humans
+├── README.md, Makefile, pyproject.toml, requirements.txt
+├── .env.example                  ← every env key documented
+├── alembic.ini
+├── alembic/
+│   ├── env.py
+│   └── versions/
+│       ├── 0001_initial_schema.py
+│       ├── 0002_image_is_nsfw.py
+│       ├── 0003_post_caption.py
+│       └── 0004_character_details.py
+├── config/
+│   ├── blocklist.yaml            ← forbidden-name base (rules layer adds minors/RL)
+│   ├── identity_pool.yaml        ← randomized identity labels (humor/content)
+│   ├── tags_pool.yaml            ← quality/style tag pools
+│   └── providers/
+│       ├── mock.yaml             ← deterministic test provider
+│       └── perchance.yaml        ← site config (reads site-config page at runtime)
+├── docs/
+│   ├── SPEC-v3.1-archive.md      ← superseded spec (verbatim archive)
+│   ├── schema.md, progress.md, spike-report.md,
+│   ├── provider-interface.md, provider-permission.md
+├── locales/
+│   ├── fa.yaml                   ← Persian-first (canonical length)
+│   └── en.yaml                   ← full parity (REQUIRED_KEYS enforced)
+├── scripts/
+│   └── upsert_admin.py
+├── src/waifubot/
+│   ├── __init__.py
+│   ├── config.py                 ← pydantic-settings; env defaults + ceilings
+│   ├── logging_setup.py          ← logging.json (console + rotating file)
+│   ├── cli.py                    ← typer: init-db, run-bot, admin upsert, gen
+│   ├── core/                     ← DOMAIN: pure logic, no framework imports
+│   │   ├── models.py             ← GenerationRequest, ImageAsset, ProviderJob…
+│   │   ├── prompts.py            ← PromptBuilder (facts → scene → flags; R15)
+│   │   ├── safety.py             ← hard rules: minors, blocklist, RL heuristics
+│   │   ├── images.py             ← MIME/EXIF, validation, spoiler, size caps
+│   │   ├── http.py               ← shared async HTTP + stealth headers
+│   │   ├── telegram_html.py      ← safe escaping
+│   │   ├── topics.py             ← forum-topic normalization
+│   │   ├── identity.py           ← character FACTS + scene merge (R14–R18)
+│   │   ├── ai_enhance.py         ← Anthropic enhancer (R20; model env-only R21)
+│   │   ├── admin_settings.py     ← settings registry + safety ceilings (R25)
+│   │   └── providers/            ← anti-captcha provider adapters
+│   │       ├── base.py           ← GenerationProvider port + result types
+│   │       ├── captcha/          ← detection, challenge runner, errors
+│   │       │   ├── types.py, errors.py
+│   │       │   ├── challenge_runner.py  ← dialog detect + human hover (R28)
+│   │       │   ├── conversation.py      ← typed input, ultra mode, sleep trigger
+│   │       │   ├── controls.py          ← read settings, enable-solution counter
+│   │       │   └── api.py               ← generator API + payload parse
+│   │       └── site/
+│   │           ├── mock.py       ← MockProvider (deterministic)
+│   │           └── perchance.py  ← PerchanceProvider (gallery snapshot R10,
+│   │                               count readback/apply, exact-need request R9)
+│   ├── db/                       ← PERSISTENCE: SQLAlchemy 2.0 async
+│   │   ├── base.py, models.py    ← Job, Image, Post, Setting, UserMemory,
+│   │   │                            Admin, Character (+ edit_of, R18)
+│   │   ├── session.py            ← engine factory, session_scope, migration-check
+│   │   └── worker.py             ← (service-side in services/; kept for history)
+│   ├── services/                 ← APPLICATION: use-cases
+│   │   ├── generation.py         ← job lifecycle + EXACT-COUNT GATE (R9–R11)
+│   │   │                           create_job / claim_job / execute_job
+│   │   │                           (top-up requeue; partial_count; keep images)
+│   │   ├── workers.py            ← worker loop + concurrency limiter
+│   │   ├── pool.py               ← review pool queries
+│   │   └── publish.py            ← publish one/album, spoilers (R22–R24)
+│   ├── bot/                      ← DELIVERY: Telegram
+│   │   ├── app.py                ← PTB wiring, PTBGateway, post_init recovery
+│   │   │                           notify (R13), on_error
+│   │   ├── commands.py           ← BotCommands: all handlers + PanelEngine
+│   │   │                           (_panel/_panel_close R2–R4), dialogs, viewer
+│   │   │                           (R5), settings UI (R25), retry (R12)
+│   │   ├── gateway.py            ← BotGateway port (send/edit/edit_media/
+│   │   │                           edit_caption/delete/reply-keyboard/hide)
+│   │   ├── memory.py             ← DialogMemory (user_memory) + PanelMemory
+│   │   ├── dialogs.py            ← dialog state types
+│   │   ├── messages.py           ← message types
+│   │   ├── posting.py            ← post/album flows
+│   │   ├── worker.py             ← worker callbacks
+│   │   ├── recovery.py           ← startup recovery + interrupted_ids (R13)
+│   │   ├── auth.py               ← admin gating (not_authorized, R27)
+│   │   └── __main__.py           ← python -m waifubot.bot
+│   └── web/                      ← (reserved) future FastAPI admin panel
+├── tests/
+│   ├── conftest.py, fakes.py     ← FakeGateway/FakeEnhancer = port fakes
+│   ├── goldens/prompt_seed42.json
+│   ├── test_bot_flow.py          ← end-to-end bot harness (Env) + flow contracts
+│   ├── test_cli.py
+│   └── unit/                     ← one module per core/service unit
+│       ├── test_generation_service.py  ← exact-count contracts (R9–R11)
+│       ├── test_perchance_adapter.py   ← stale-gallery exclusion (R10)
+│       ├── test_prompt_builder.py, test_identity.py, test_content_safety.py
+│       ├── test_image_pipeline.py, test_admin_settings.py, test_locale.py
+│       └── … (config, models, mock provider, tags pool, alembic, bot units)
+└── tools/spike/                  ← isolated captcha/anti-bot spikes (never prod)
+    ├── spike_run.py, spike_env_check.py, spike_config.example.yaml, README.md
+```
 
-**Consistency, honestly.** Repeating the same text makes the *instructions* consistent, not the *face*. Strategy, in order:
+### 3.3 Data flow (generation path)
 
-1. Use a provider-supported seed or reference image if one exists.
-2. Otherwise use a fixed, rich identity block (hair, eyes, distinctive marks) and a locked style, in the same position in every prompt.
-3. If results fall below the threshold, the fix is a different backend that supports reference conditioning, for example a self-hosted workflow on a GPU host. That is a separate approved decision, not a prompt tweak.
+```
+bottom-keyboard press (NEW panel) / inline (EDIT panel)
+  → wizard (style → character/prompt → enhance? → flags → count → NSFW → confirm)
+  → services.generation.create_job   (request: prompt+style, flags, count N, kind, job_type)
+  → workers claim → provider.generate(needed = N - already)      [R9]
+  → pipeline (validate, hash, persist, review)  → images rows
+  → exact-count gate: total >= N ? succeeded : partial_count + top-up requeue
+  → notify (R12) → review (viewer edits-in-place R5) → pool / publish / album
+```
 
-**Study protocol:** 20 images of one canonical character across varied poses, outfits, and backgrounds. A human rates each 1–5 on face shape, hair, eyes, distinctive features, and style. **Set the pass threshold before reviewing results.** Proposed *starting default*: at least 70% of images average 4 or more, and none below 3 on hair or eyes. Below that, call it "approximate consistency".
+### 3.4 Evolution path (reserved, planned)
 
-**Save Character** works only from real job metadata: read the job's prompt snapshot and presets, ask the admin for a name, show the proposed identity text for confirmation or editing, then save a new version. Never infer a prompt from pixels. Externally supplied images are stored as manual references with any description marked as user-confirmed.
+| Future feature | Reserved home | Notes |
+|---|---|---|
+| Web admin panel | `src/waifubot/web/` | FastAPI + Jinja2/HTMX; auth = same Admin table |
+| New providers (Zovla/pixai) | `core/providers/site/` + `config/providers/*.yaml` | port unchanged; no-captcha ones ship first |
+| OnlyWaifus live | spike only until written permission | docs/provider-permission.md |
+| Paid NSFW channel button | `bot/commands.py` publish flow | marked **بعداً** in UI |
+| AI captions for albums | `core/ai_enhance.py` (caption mode) | typed captions until then |
+| S3 object store | `core/images.py` ImageStore port | local FS now |
+| Rate limiting / observability | `services/` + `logging_setup.py` | README known-issues |
 
 ---
 
-## 7. Presets and captions
+## 4. Contracts
 
-- Persian captions are built from templates in `fa.yaml`, with placeholders filled from stored data. Check mixed Persian and English text visually, because right-to-left rendering of placeholders can misorder punctuation.
-- Presets are data, not logic. Keep the style lock separate from scene variables.
-- Incompatible combinations are rejected, not silently mixed.
+### 4.1 Job lifecycle
 
----
+`pending → running → succeeded | retry_wait | failed` (plus `partial_count` **error code** on short batches, R9). Success requires `images ≥ count` exactly at the gate. Cancel/delete allowed while not running.
 
-## 8. Content safety
+### 4.2 JSON shapes
 
-- SFW only. The NSFW switch is a hard environment setting with no Telegram override.
-- **Human review is the primary control.** Every image is reviewed by the admin before it can reach the pool, and the scheduler posts only from the pool. Automated checks reduce risk but do not guarantee safety: a text rule cannot make a provider draw an adult, and keyword lists can be bypassed.
-- Every character must be explicitly adult. `identity_prompt` must state an adult age and adult features, validated when a character is saved.
-- A configurable blocklist of minor-coded terms is applied to the **final** prompt, including any admin-typed text. A match rejects the job with a clear error.
-- A random SFW/NSFW ratio is never a safety control.
-- Existing-IP characters ("known" characters) are excluded from the MVP; publishing derivative images of trademarked characters to a public channel is a separate question.
-- Any future adult-content phase requires a separate review of provider permission, platform rules, access control, age assurance, and applicable law.
+- `Character.details_json`: `{traits{…}, extras, mode: known|manual|precise, name, known_name, known_anime, edit_of}`
+- View state (pool/inbox): `{page, total, img_id, visible: [c,m,s,d,sp], caption}`
+- Panel memory (`settings.panel:<admin_id>`): JSON `[chat_id, message_id]`
+- Scheduler state (settings): `{channel_id, topic_id, post_count, random_order, min_gap_minutes, max_gap_minutes, next_at, running}`
+- AI enhance request: `{details_json, scene_prompt, name, known_name, known_anime}`
 
----
+### 4.3 Environment (defaults & secrets only — R25)
 
-## 9. Provider interface and image pipeline
+`TELEGRAM_BOT_TOKEN`, `ADMIN_IDS`, `DATABASE_URL`, `ANTHROPIC_API_KEY`, `AI_ENHANCE_MODEL`, `PROVIDER`, `PROVIDER_CONFIG_PATH`, `POOL_DIR`, `LOG_LEVEL`, `RETRY_MAX_ATTEMPTS`, `RETRY_BACKOFF_SECONDS`, `SCHEDULER_TICK_SECONDS`, `MAX_IMAGE_MB`, `ALLOWED_MIME_TYPES`, `CHALLENGE_SLEEP_SECONDS`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_PATH`, `POOL_CAP_ITEMS`, `POOL_CAP_BYTES`. Runtime knobs (worker count, concurrency, challenges, retries, sizes, scheduler) live in the settings panel.
 
-### 9.1 Interface (conceptual)
+### 4.4 Locale policy
 
-`health_check()`, `generate(request)`, `close()`. The request carries prompt, image count, style mapping, timeout, and safe metadata. The result carries status, validated asset metadata, elapsed time, provider name, job ID, and a normalized error code. The shared interface lives in `core/image_provider.py`; the Perchance adapter in `core/providers/`. The Telegram layer never knows about the site's DOM.
-
-**The interface is frozen only after the Sprint 0 report is read.** If the provider delivers images progressively rather than as one final result, the interface must allow that. The mock provider is shaped by the real behavior, and can simulate timeouts, malformed data, partial results, and challenge pages.
-
-### 9.2 Per-candidate validation
-
-Parse the Data URL and MIME type → decode Base64 in Python → SHA-256 over the decoded bytes → open and verify with Pillow → record real format, width, height, size → enforce configurable minimum and maximum limits → write to a `.part` file and rename atomically → use a generated UUID filename, never page-supplied text → only then mark the image `pending_review`. A partial or failed file is never visible as ready.
-
-### 9.3 Known weaknesses of the proof-of-concept (to confirm against the real script)
-
-- A built-in `hash` of the last 200 characters is not a stable fingerprint; use SHA-256.
-- Saving every image as `.jpg` ignores the real format; derive the extension from validation.
-- Blanket exception swallowing hides systematic failure and makes a broken page look like waiting.
-- Scanning every canvas picks up UI canvases and duplicates.
-- Re-sending large Base64 payloads on a short poll interval wastes memory.
-- Parsing a seed from an image title is unreliable unless documented.
-- Fixed sleeps, forced clicks, and automation launch flags are not production behavior.
-- Target count and timeout are hardcoded; they must be configuration with hard maximums.
+All user-facing text goes through `bot/messages.py` (`t(key, **fmt)`). `REQUIRED_KEYS` are the minimum both `fa.yaml` and `en.yaml` must define; tests enforce. Adding a key = update both files.
 
 ---
 
-## 10. Jobs, worker, and scheduler
+## 5. Testing & deployment
 
-**Claim rule (SQLite):** the worker claims a job with a conditional update that sets `running` only where the job is still `pending`, and proceeds only if exactly one row changed. With one process and concurrency 1 this is sufficient.
+### 5.1 Test commands (WSL2)
 
-**Order:** priority ascending, then created time, then ID.
+```bash
+cd ~/waifubot && source .venv/bin/activate
+python -m pytest tests/ -q            # full suite (161 green at v4.0)
+python -m ruff check src/ tests/ alembic/   # lint gate
+```
 
-**Transitions** are validated in one place: `pending → running → succeeded | failed`; `pending → cancelled`; `failed → pending` for a scheduled retry only while attempts remain. Generation and review are separate: a job that produced images is `succeeded`; review state lives on `images`.
+Rule: every new feature lands with tests; no live provider runs (R32); fakes are the ports' doubles; golden files lock prompt determinism.
 
-**Retries (*starting defaults*):** at most 2 attempts, backoff 30 seconds then 120 seconds, transient errors only. Permanent errors and `blocked_by_provider` never retry.
+### 5.2 Deployment (WSL2)
 
-**Circuit breaker (*starting default*):** after 3 consecutive provider failures, pause automatic generation and notify the admin. Only a person resumes.
+venv `~/waifubot/.venv`; `make install`; `make migrate` (absolute `script_location` in alembic.ini); `make run-bot` / `make worker`; `make reset-db` resets after confirmation. Secrets live in `.env` only (never committed; remote history is scrubbed with `[REDACTED]` if needed). systemd unit planned for auto-restart (`Restart=always`). RAM/WSL settings are measured before tuning (`.wslconfig` task, open).
 
-**After a restart:** any job left `running` becomes `failed` with `error_code=interrupted` and is **not** retried automatically; the admin can requeue it. Startup also cleans up what that job left behind: `.part` files in temp storage, and image rows that point to missing files are marked `missing`.
+### 5.3 Known deferred items
 
-**Idempotency:** the request key is derived from the Telegram update or callback ID, so a double tap cannot create two jobs.
-
-**Scheduler (Sprint 4):** enqueue-only. Stable job IDs with replace-on-restart, a single running instance per job, coalescing on, and a short misfire window so downtime never causes a burst. Jobs: `auto_gen` (enqueue one if enabled and under the daily cap and disk floor), `post` (publish the next approved image), `cleanup`, `health`. The daily cap is counted from the database, never from memory. Health checks never generate an image.
-
----
-
-## 11. Telegram admin flow
-
-**Access:** admin IDs from `ADMIN_USER_IDS`. Authorize on the server for every command and callback; a hidden button is not authorization. Reject others silently with a safe log line. No public user flow and no user handler in the MVP.
-
-**Commands:** `/start`, `/help`, `/status`, `/generate`, `/inbox`, `/queue`, `/pool`, `/publish`, `/settings`, `/pause`, `/resume`, `/characters`.
-
-**Generation wizard (short):** style → character (or one-off original) → image count → confirm → job ID. Anything left unchosen is randomized.
-
-**Review inbox:** each finished image is sent to the admin as a preview with Approve, Reject, and Save Character. Approved images enter the pool. `/pool` lists approved, unpublished images; `/publish` lets the admin pick one from that list to post now. The scheduler posts the oldest approved image on the interval.
-
-**Callbacks:** carry a short opaque ID (the length limit is small, A5). On every press, re-validate the caller, the object, and its current state. A stale or tampered callback does nothing.
-
-**Publishing:**
-
-- Check file type and size against the limits (A5) before sending. Photo sends recompress; use a document send when the original must stay lossless.
-- Generation and publication are separate; a send failure never triggers regeneration.
-- Every attempt is recorded in `posts`. If a send times out and the outcome is ambiguous, set `unknown` and notify the admin. The admin resolves it with two buttons: "it was sent" (the admin supplies or confirms the message) or "it was not sent" (back to `pending`). Never auto-resend. The unique key prevents scheduling the same publication twice but cannot promise exactly-once delivery.
-- A spoiler flag is only a blur effect, not a paywall.
-
-**i18n:** every user-visible string, including buttons and callback answers, comes from `locales/fa.yaml`. A startup check fails on missing keys. Logs stay in English.
+`.wslconfig` tuning after RAM measurement; live-run announcement protocol before any `--confirm-live`; paid NSFW button; AI captions; web panel. These are open asks — nothing else is pending.
 
 ---
 
-## 12. Storage, security, and operations
+## 6. Change log
 
-- `storage/temp/` holds `.part` files and previews with a short TTL (*starting default*: 24 hours). `storage/images/` holds accepted images.
-- Cleanup deletes only expired temp files and confirmed orphans. Final images follow a separate configurable retention. An image referenced by a character, an unpublished approved image, or a post is never deleted by TTL.
-- Check free disk before every generation. Below a hard floor (*starting default*: 2 GB), pause generation and notify the admin.
-- Rotate logs; keep job history bounded.
-- Never log Base64 data, cookies, tokens, or full environment dumps. Log job ID, provider, duration, attempt, result, and normalized error code.
-- Keep the bot token only in the environment; restrict file permissions on `.env`, the database, the browser profile, and storage; ignore them in Git. If the token is ever exposed, revoke and replace it.
-- Graceful shutdown: stop accepting jobs, let the active job finish or time out, close the browser, commit final states.
-- The README documents setup, configuration, start, stop, recovery, backup, and restore of the database and character data.
-
----
-
-## 13. Testing
-
-The test environment has **no network**: block outgoing connections in tests so nothing can reach a provider or Telegram by accident.
-
-**Unit tests:** prompt building and exact identity preservation; preset compatibility and malformed YAML; settings validation and hard limits; locale loading and missing keys; job transition table and retry policy; Data URL parsing, MIME mismatch, malformed bytes, size limits; atomic save with no partial file left; cleanup never deleting a referenced file; blocklist and adult-character validation; admin-only authorization and callback ownership.
-
-**Integration tests (mock provider, temporary SQLite):** a job runs end to end and images land as `pending_review`; foreign keys and uniqueness behave; a duplicate request creates one job; a stale `running` job becomes `interrupted` after restart and its leftovers are cleaned; a provider timeout retries a bounded number of times; a failed send does not regenerate; an ambiguous send becomes `unknown` and both resolution buttons work.
-
-**Manual live checks (opt-in):** one visible-browser smoke run, then controlled generations at the permitted rate. Record success rate, median and maximum runtime, valid image count, validation errors, and peak RAM and disk. Test headless mode only if permitted.
-
----
-
-## 14. Sprint plan and gates
-
-### Sprint 0 — Provider feasibility spike (explicit approval required; live browser)
-
-Throwaway scripts under `tools/spike/`, not application code. The user places the existing proof-of-concept and the written support reply where the agent can read them.
-
-- Read the proof-of-concept and confirm or correct the weakness list in section 9.3.
-- Record the permission scope in `docs/provider-permission.md`; **[VERIFY]** A1 and A7.
-- Check A2 (window opens under WSL2) and A4 (memory) on the real machine.
-- Run controlled generations, **no faster and no more than the permitted rate** (*starting default*: 10 runs, spaced out). Record success rate, runtime, formats, validity, and RAM. Resolve A8.
-- Test headless only if A1 permits it.
-- Decide go or no-go. On no-go, shortlist replacements using the criteria in section 3.
-
-**Exit:** a one-page spike report with a decision. Stop.
-
-### Sprint 1a — Foundation (no browser, no network)
-
-- Repository structure, `.gitignore`, `.env.example`, configuration validation, runtime directories, README setup.
-- The 5 tables, Alembic baseline migration, schema inspection command, relationship and constraint tests.
-- Locale loader and startup key check.
-
-**Exit:** clean checkout sets up; schema documented and tested; tests pass. Stop.
-
-### Sprint 1b — Vertical slice with the mock provider
-
-- Provider interface, shaped by the spike report, and the mock provider.
-- Preset loader, deterministic prompt builder, content-safety checks.
-- Image validation and atomic-save pipeline.
-- CLI: initialize database, add a character, run a mock generation.
-
-**Exit:** the CLI creates a job and stores validated mock images; unit tests pass; the interface decisions are explained against the spike findings. Stop.
-
-### Sprint 2 — Real Playwright provider
-
-- Adapter using the async API, selectors isolated, hard timeouts, explicit configuration gate.
-- Reuse the 1b pipeline. Add the manual live command.
-- Small live smoke test through the real adapter (*starting default*: 3 runs), not a repeat of the full measurement, within the permitted rate and with notice to the user beforehand.
-
-**Exit:** real images validated and saved; timeouts and page changes produce actionable errors with no uncontrolled retries. Stop.
-
-### Sprint 3 — Telegram admin bot (manual flow)
-
-- Application setup, admin authorization, Persian commands and wizard.
-- Worker inside the bot lifecycle, durable jobs, the claim rule.
-- Preview, approve, reject, `/inbox`, `/pool`, manual `/publish` to a **test** destination, post state and message ID, ambiguous-send resolution.
-
-**Exit:** an admin requests, reviews, approves, and publishes to the test destination; state survives restart. Stop.
-
-### Sprint 4 — Automation
-
-- Scheduler, daily cap, disk floor, pause and resume, circuit breaker.
-- Retry and backoff, stale-job recovery and cleanup, safe settings updates.
-- Scheduled posting from the approved pool.
-
-**Exit:** a restart or transient error never causes duplicate or runaway generation; caps hold under repeated firing. Stop.
-
-### Sprint 5 — Characters and consistency
-
-- Versioned characters, Save Character from real job metadata, restart persistence.
-- The 20-image consistency study with the threshold set beforehand.
-- Decision: acceptable, or escalate to a reference-capable backend.
-
-**Exit:** documented result and decision. Stop.
-
-### Sprint 6 — Pilot (separately approved)
-
-A 24-hour or agreed pilot against the section 1.4 criteria, with CPU, RAM, and disk measurement; backup and restore drill; network and provider failure drills; disk-pressure auto-pause; a decision on always-on deployment.
-
----
-
-## 15. Definition of done
-
-- [ ] Setup, start, stop, and recovery are documented for the target environment.
-- [ ] Every user-facing string comes from `locales/fa.yaml`.
-- [ ] The provider is behind an interface and can be disabled by configuration.
-- [ ] Permission scope is recorded and respected; live runs stayed within the permitted rate.
-- [ ] Candidate images are decoded, validated, hashed, and saved atomically.
-- [ ] Prompt generation works with no LLM and no paid API; fixed identity text is preserved exactly.
-- [ ] A saved character can be selected after a restart.
-- [ ] Jobs survive restart; stale-job recovery and leftover cleanup are tested.
-- [ ] An admin can request a job, review it, and publish an approved image to a test destination with state recorded.
-- [ ] Duplicate requests are blocked; ambiguous sends are handled and resolvable.
-- [ ] Scheduler limits, pause and resume, and cleanup rules are tested; cleanup never deletes needed files.
-- [ ] Provider, Telegram, database, disk-pressure, and restart failures have tests or documented manual checks.
-- [ ] Every **[VERIFY]** item is resolved and recorded.
-- [ ] The section 1.4 criteria were evaluated in the pilot.
-- [ ] No out-of-scope feature was built.
-
----
-
-## 16. Decisions needed from the user
-
-**Before Sprint 0 (blocking):** the written Perchance support reply (page, method, rate, visible or headless, public posting); the proof-of-concept script; whether WSLg works on this machine.
-
-**Before Sprint 3:** admin Telegram IDs and a test channel ID.
-
-**Before Sprint 4:** posting interval, daily cap, images per job, retention for final images, and whether captions are Persian only.
-
-**Worth deciding early:** whether the Windows host has a GPU for a reference-capable backend, whether the channel is public or commercial, and whether the section 1.4 success criteria are the right ones.
-
----
-
-## 17. Future phases and their preconditions
-
-Each phase needs its own scope and approval.
-
-- **Chat and personality:** choose and budget an LLM first; the free-provider setup cannot carry it.
-- **Per-user memory:** consent and deletion controls designed before anything is stored.
-- **Images from chat:** reuse the same character record; requires a stable consistency result.
-- **Credits, subscriptions, paid media:** the provider's terms must allow commercial use. A free provider driven through browser automation almost certainly cannot underpin a paid product, so this phase probably means a different image backend. Re-check the current Telegram Bot API and library version, and test payment verification, idempotent fulfillment, refunds, and access control.
-- **Adult content:** only after legal, platform, provider, and age-assurance review; never involving minors or age-ambiguous characters.
-
----
-
-## Final principle
-
-Prove the riskiest assumption first, then build the shortest measurable path: **feasibility spike → foundation → mock-provider vertical slice → real provider → Telegram review and manual publish → scheduled posting from the approved pool → consistency study and pilot.** Keep a layer only when something real needs it.
+| Version | Highlights |
+|---|---|
+| **v4.0** (2026-10-17) | Multi-admin model; bottom-keyboard = new panel / in-menu = same panel (R2–R3); back/close everywhere (R4); viewer edits-in-place (R5); fast typing (R6); **exact image counts 2/4/6/8/16 with undercount gate + auto top-up + partial_count** (R9–R11); stale-gallery exclusion (R10); character = appearance facts + scene at generation (R14–R15); known characters (R16); save-button policy (R17); edit = new version (R18); AI enhance at both confirms + env-only model (R20–R21); settings fully editable with safety ceilings (R25); adult restriction removed / minor protection kept (R26); interruption notices (R13); toggle settings buttons; panel close; full architecture documented (§3). |
+| v3.1 | Original MVP spec (see `docs/SPEC-v3.1-archive.md`). |
