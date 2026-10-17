@@ -612,6 +612,10 @@ class PerchanceProvider:
                 )
             except Exception:  # noqa: BLE001
                 notes.append("style_select_failed")  # non-fatal (user decision)
+        # Images still on the page from PREVIOUS generations must never be
+        # counted as part of THIS batch (root cause of wrong output/count,
+        # debug 2026-10-17): snapshot the gallery before pressing generate.
+        stale_urls = set(await self._collect(page))
         gen = frame.locator(selectors["generate_button"])
         try:
             await gen.hover()
@@ -636,7 +640,7 @@ class PerchanceProvider:
                 return finish(STATUS_BLOCKED, list(collected.values()), ERROR_BLOCKED,
                               f"blocked during poll: {reason}")
             for url in await self._collect(page):
-                if url in collected:
+                if url in stale_urls or url in collected:
                     continue
                 parsed = decode_data_url(url)
                 if not parsed:

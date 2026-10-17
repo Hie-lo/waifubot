@@ -41,6 +41,8 @@ from waifubot.errors import ValidationError
 _MAX_SUMMARY = 200
 # Transient provider failures may retry; everything else is permanent (SPEC §10).
 TRANSIENT_ERROR_CODES = (ERROR_TIMEOUT, ERROR_PROVIDER)
+# exact-count gate (user rule 2026-10-16): a short batch is never "success"
+ERROR_PARTIAL_COUNT = "partial_count"
 BACKOFF_S = (30, 120)
 
 
@@ -165,11 +167,25 @@ async def execute_job(
     """
     filters = json.loads(job.filters_json or "{}")
     count = int(filters.get("count") or 1)
+    # EXACT-count rule (user 2026-10-16): images already stored by earlier
+    # attempts of THIS job count towards the target — a retry TOPS UP the
+    # remainder instead of adding a second full batch.
+    already = int((
+        await session.execute(
+            sa_select(sa_func.count()).select_from(Image).where(Image.job_id == job.id)
+        )
+    ).scalar_one())
+    needed = count - already
+    if needed <= 0:
+        job.status = "succeeded"
+        job.finished_at = _now()
+        await session.flush()
+        return job, [], None
     try:
         result = await provider.generate(
             GenerationRequest(
                 prompt=job.prompt_snapshot,
-                count=count,
+                count=needed,
                 style_value=str(filters.get("style_value") or ""),
                 timeout_s=float(filters.get("timeout_s") or 240.0),
                 job_id=job.id,
@@ -231,12 +247,29 @@ async def execute_job(
         session.add(row)
         image_rows.append(row)
 
-    if image_rows:
+    total = already + len(image_rows)
+    if total >= count:
         job.status = "succeeded"
     else:
-        job.status = "failed"
-        job.error_code = "no_valid_images"
-        job.error_summary = _summary(f"rejected: {','.join(sorted(set(rejected)))}")
+        # EXACT-count gate (user 2026-10-16): a short batch must NEVER
+        # silently succeed — keep the stored images and either requeue (the
+        # next attempt tops up) or fail with a visible error + retry button.
+        detail = f"undercount: {total}/{count} images"
+        if rejected:
+            detail += f" (rejected: {','.join(sorted(set(rejected)))})"
+        if total == 0:
+            job.error_code = "no_valid_images"
+        else:
+            job.error_code = ERROR_PARTIAL_COUNT
+        job.error_summary = _summary(detail)
+        if allow_retry and job.attempt_count < job.max_attempts:
+            backoff = BACKOFF_S[job.attempt_count - 1] if job.attempt_count - 1 < len(
+                BACKOFF_S
+            ) else BACKOFF_S[-1]
+            job.status = "pending"
+            job.next_attempt_at = _now() + timedelta(seconds=backoff)
+        else:
+            job.status = "failed"
     job.finished_at = _now()
     await session.flush()
     return job, image_rows, result

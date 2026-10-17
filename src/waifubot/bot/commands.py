@@ -128,6 +128,10 @@ class BotApp:
     # ---- dispatch ---------------------------------------------------------
     async def handle_message(self, inb: Inbound) -> None:
         if not self._gate.allow(inb.user_id):
+            # clear answer instead of dead silence (wired 2026-10-17)
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("not_authorized")
+            )
             return
         try:
             text = (inb.text or "").strip()
@@ -1567,6 +1571,8 @@ class BotApp:
             ]
             await self._panel(inb, self._msgs.t("publish_unknown"), buttons=buttons
             )
+        elif outcome.error == "too_large":
+            await self._panel(inb, self._msgs.t("publish_too_large"))
         else:
             await self._panel(inb,
                 self._msgs.t("publish_failed", error=outcome.error or "unknown"),

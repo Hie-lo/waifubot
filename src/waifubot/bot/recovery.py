@@ -18,10 +18,18 @@ log = logging.getLogger(__name__)
 async def startup_recover(
     sessions: async_sessionmaker[AsyncSession], storage_root: Path
 ) -> dict[str, int]:
-    stats = {"interrupted_jobs": 0, "part_files_removed": 0, "missing_images": 0}
+    stats = {
+        "interrupted_jobs": 0,
+        "part_files_removed": 0,
+        "missing_images": 0,
+        "interrupted_ids": [],
+    }
 
     # 1) stale running jobs -> failed/interrupted (not retried automatically)
     async with sessions() as s:
+        ids = list((await s.execute(
+            select(Job.id).where(Job.status == "running")
+        )).scalars().all())
         result = await s.execute(
             update(Job)
             .where(Job.status == "running")
@@ -29,6 +37,7 @@ async def startup_recover(
                     error_summary="interrupted by restart")
         )
         stats["interrupted_jobs"] = result.rowcount or 0
+        stats["interrupted_ids"] = [int(i) for i in ids]
         await s.commit()
 
     # 2) leftover .part files from atomic writes

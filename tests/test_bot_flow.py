@@ -119,10 +119,13 @@ def env(tmp_path: Path):  # noqa: ANN201
 
 def test_wizard_to_publish_full_flow(env: Env) -> None:
     async def body() -> None:
-        # unauthorized user is silently ignored (no reply, no dialog)
+        # unauthorized user gets a clear answer, never a dialog (wired
+        # 2026-10-17 — the not_authorized key was planned but never used)
         await env.app.handle_message(env.msg("/generate", user_id=999))
-        assert env.gw.messages == []
+        assert len(env.gw.messages) == 1
+        assert "دسترسی" in env.gw.messages[0][1]
         assert await env.memory.get(999) is None
+        env.gw.messages.clear()
 
         # /generate wizard: style -> one-off -> identity -> count -> confirm
         await env.app.handle_message(env.msg("/generate", update_id=10))

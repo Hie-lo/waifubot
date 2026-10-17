@@ -328,7 +328,14 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
 
         from waifubot.db.models import Setting
 
-        await startup_recover(sessions, settings.storage_root)
+        recovered = await startup_recover(sessions, settings.storage_root)
+        for job_id in recovered.get("interrupted_ids", []):
+            # planned key wired up (debug 2026-10-17): the admin SEES what
+            # a restart interrupted instead of finding it later by hand
+            for admin in settings.admin_user_ids:
+                await gateway.send_message(
+                    admin, msgs.t("interrupted_notice", job_id=job_id)
+                )
         async with sessions() as s:
             row = await s.get(Setting, "runtime_paused")
             if row is not None and row.value_json in ("true", "True"):

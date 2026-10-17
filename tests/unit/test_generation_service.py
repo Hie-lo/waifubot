@@ -91,17 +91,23 @@ def test_timeout_job_fails(env) -> None:  # noqa: ANN001
     assert images == []
 
 
-def test_partial_still_succeeds_with_images(env) -> None:  # noqa: ANN001
+def test_partial_never_silently_undercounts(env) -> None:  # noqa: ANN001
+    """EXACT-count rule (user 2026-10-16): a short batch is not 'success'.
+    The CLI one-shot never retries -> failed/partial_count, images kept."""
     factory, builder, pipeline = env
     job, images, _ = _generate(factory, builder, pipeline, "partial")
-    assert job.status == "succeeded"
-    assert len(images) == 2
+    assert job.status == "failed"
+    assert job.error_code == "partial_count"
+    assert len(images) == 2  # the good images are kept (never delete work)
 
 
 def test_malformed_candidates_filtered(env) -> None:  # noqa: ANN001
+    """Corrupt candidates shrinking the batch below the requested count is
+    an UNDERCOUNT (exact-count rule) — kept images, visible failure."""
     factory, builder, pipeline = env
     job, images, _ = _generate(factory, builder, pipeline, "malformed")
-    assert job.status == "succeeded"
+    assert job.status == "failed"
+    assert job.error_code == "partial_count"
     assert len(images) == 2  # 2 of 4 are corrupt and rejected
 
 
@@ -291,3 +297,118 @@ def test_actionable_error_code_is_preserved(env) -> None:  # noqa: ANN001
     assert job.status == "failed"
     assert job.error_code == "selector_timeout"  # actionable code kept
     assert images == []
+
+
+def test_undercount_requeue_tops_up_to_exact_count(env) -> None:  # noqa: ANN001
+    """A retry does NOT run a second full batch: it generates only the
+    MISSING images so the job ends with EXACTLY the requested count."""
+    from sqlalchemy import select as sa_select
+
+    from waifubot.db.models import Image, Job
+    from waifubot.services.generation import create_job, execute_job
+
+    factory, builder, pipeline = env
+
+    class UniqueMock(MockProvider):
+        """Like MockProvider but every call makes fresh bytes (like the real
+        site) so cross-attempt dedupe does not eat the top-up batch."""
+
+        async def generate(self, request):  # noqa: ANN001, ANN202
+            self._calls = getattr(self, "_calls", 0) + 1
+            meta = dict(request.metadata or {})
+            meta["seed"] = str(1000 * self._calls)
+            from dataclasses import replace as dc_replace
+
+            return await super().generate(dc_replace(request, metadata=meta))
+
+    async def body() -> None:  # noqa: ANN202
+        async with factory() as session:
+            job = await create_job(
+                session, builder=builder, identity=IDENTITY, style_lock=None,
+                count=4, seed=1, idempotency_key="topup1",
+            )
+            await session.commit()
+            job_id = job.id
+        provider = UniqueMock({"mode": "partial", "partial_count": 2})
+
+        # attempt 1: 2 of 4 -> requeued (pending), the 2 images stay
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            job, imgs1, _ = await execute_job(
+                session, provider=provider, pipeline=pipeline, job=job,
+                allow_retry=True,
+            )
+            await session.commit()
+        assert job.status == "pending" and job.error_code == "partial_count"
+        assert len(imgs1) == 2
+
+        # attempt 2: only the MISSING 2 are requested -> EXACTLY 4 total
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            job, imgs2, _ = await execute_job(
+                session, provider=provider, pipeline=pipeline, job=job,
+                allow_retry=True,
+            )
+            await session.commit()
+        assert job.status == "succeeded"
+        assert len(imgs2) == 2  # top-up requested 2, not 4
+        async with factory() as session:
+            rows = (await session.execute(
+                sa_select(Image).where(Image.job_id == job_id)
+            )).scalars().all()
+        assert len(rows) == 4  # EXACTLY the requested count
+
+    _run(body())
+
+
+def test_duplicate_bytes_shrinking_batch_is_undercount(env) -> None:  # noqa: ANN001
+    """Dedupe may never deliver fewer than the requested count silently —
+    identical bytes collapse to 1 image -> undercount gate fires."""
+    from io import BytesIO
+
+    from PIL import Image as PILImage
+
+    from waifubot.core.image_pipeline import ImageCandidate
+    from waifubot.core.image_provider import GenerationRequest, GenerationResult
+
+    factory, builder, pipeline = env
+
+    buf = BytesIO()
+    PILImage.new("RGB", (256, 256), (10, 20, 30)).save(buf, format="PNG")
+    same = buf.getvalue()
+
+    class DupProvider:
+        name = "dup"
+
+        async def health_check(self) -> bool:
+            return True
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            cand = ImageCandidate(
+                data=same, claimed_mime="image/png", source="dup"
+            )
+            return GenerationResult(
+                status="ok", candidates=[cand] * request.count, elapsed_s=0.0,
+                provider="dup",
+            )
+
+    async def body() -> None:  # noqa: ANN202
+        async with factory() as session:
+            job, images, _ = await run_generation_job(
+                session,
+                provider=DupProvider(),
+                pipeline=pipeline,
+                builder=builder,
+                identity=IDENTITY,
+                style_lock=None,
+                count=4,
+                seed=7,
+            )
+            await session.commit()
+            return job, images
+
+    job, images = _run(body())
+    assert job.status == "failed"
+    assert job.error_code == "partial_count"  # 1 unique of 4 requested
+    assert len(images) == 1  # the one unique image is kept
+
