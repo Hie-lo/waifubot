@@ -52,3 +52,20 @@ class FakeGateway:
 
     async def answer_callback(self, callback_id, text="") -> None:  # noqa: ANN001
         self.answers.append((callback_id, text))
+
+
+class FakeEnhancer:
+    """Test double for AiEnhancer — records calls, canned response."""
+
+    def __init__(self, reply: str = "ENHANCED PROMPT (all details preserved)") -> None:
+        self.reply = reply
+        self.calls: list[tuple[str, bool, str]] = []
+        self.fail_mode = ""
+
+    async def enhance(self, prompt: str, *, known: bool, model: str = "") -> str:
+        self.calls.append((prompt, known, model))
+        if self.fail_mode == "error":
+            from waifubot.errors import AiError
+
+            raise AiError("boom")
+        return self.reply

@@ -32,7 +32,7 @@ from waifubot.db.models import Character, Image, Job, Post
 from waifubot.db.session import make_engine, make_session_factory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fakes import FakeGateway
+from fakes import FakeEnhancer, FakeGateway
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ADMIN_ID = 111
@@ -65,6 +65,7 @@ class Env:
         self.settings = AdminSettings(factory)
         self.memory = DialogMemory(factory)
         self.provider = provider or MockProvider({"mode": "ok"})
+        self.ai = FakeEnhancer()
         self.pipeline = ImagePipeline(self.tmp_path / "storage")
         self.worker = GenerationWorker(
             sessions=factory,
@@ -84,6 +85,7 @@ class Env:
             worker=self.worker,
             gate=AdminGate((ADMIN_ID,)),
             builder=PromptBuilder(pool, blocklist),
+            enhancer=self.ai,
             config=BotConfig(
                 admin_ids=(ADMIN_ID,),
                 dest_chat_id="-100555",
@@ -788,5 +790,130 @@ def test_stage2_structured_character_edit_and_scene(env: Env) -> None:
         await env.app.handle_callback(env.cb("wiz:sk", update_id=83))
         d = await env.memory.get(ADMIN_ID)
         assert d["step"] == "count" and d.get("scene") == ""
+
+    _run(body())
+
+
+def test_stage3_ai_enhance_buttons(env: Env) -> None:
+    """Stage 3 (user 2026-10-16): AI enhance buttons at the character confirm
+    and at the generate final prompt; the fixed instruction preserves all
+    details and the enhanced prompt is what gets saved/generated."""
+
+    async def body() -> None:
+        from sqlalchemy import select as sa_select
+
+        # make a job so savec has a source
+        await env.app.handle_message(env.msg("/generate", update_id=1))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=2))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=3))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=4))
+        await env.app.handle_callback(env.cb("wiz:n:1", update_id=5))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=6))
+        async with env.factory() as s:
+            job_id = (await s.execute(sa_select(Job))).scalars().one().id
+
+        # ---- AI enhance at the character confirm -------------------------
+        await env.app.handle_callback(env.cb(f"savec:{job_id}", update_id=10))
+        await env.app.handle_message(env.msg("Hana", update_id=11))
+        await env.app.handle_callback(env.cb("savec:p", update_id=12))
+        picks = [
+            ("age", "24"), ("height", "160"), ("hair_color", "black"),
+            ("hair_style", "long"), ("eye_color", "brown"), ("skin", "fair"),
+            ("face", "oval"), ("body_type", "slim"),
+            ("body_proportions", "average"),
+        ]
+        uid = 13
+        for trait, value in picks:
+            await env.app.handle_callback(env.cb(f"savec:t:{trait}:{value}", update_id=uid))
+            uid += 1
+        await env.app.handle_message(env.msg("red ribbon", update_id=uid))
+        review_msg = env.gw.messages[-1]
+        labels = [b[0] for row in (review_msg[2] or []) for b in row]
+        assert any("هوش مصنوعی" in lab for lab in labels)  # enhance button shown
+        await env.app.handle_callback(env.cb("savec:ai", update_id=30))
+        assert env.ai.calls, "enhancer must be called"
+        prompt_seen, known_seen, _m = env.ai.calls[-1]
+        assert "24" in prompt_seen and "red ribbon" in prompt_seen  # details kept
+        assert known_seen is False  # not a known-character dialog
+        cmp_msg = env.gw.messages[-1]
+        cmp_labels = [b[1] for row in (cmp_msg[2] or []) for b in row]
+        assert "savec:aiok" in cmp_labels and "savec:aiundo" in cmp_labels
+        # apply the AI version -> it becomes the stored identity
+        await env.app.handle_callback(env.cb("savec:aiok", update_id=31))
+        await env.app.handle_callback(env.cb("savec:ok", update_id=32))
+        async with env.factory() as s:
+            row = (await s.execute(sa_select(Character))).scalars().first()
+            await s.commit()
+        assert "ENHANCED PROMPT" in row.identity_prompt
+
+        # ---- AI enhance at the generate final prompt ---------------------
+        await env.app.handle_message(env.msg("/generate", update_id=40))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=41))
+        await env.app.handle_callback(env.cb("wiz:c:0", update_id=42))
+        await env.app.handle_message(env.msg("glowing eyes", update_id=43))
+        await env.app.handle_message(env.msg("on a rooftop", update_id=44))
+        await env.app.handle_callback(env.cb("wiz:n:1", update_id=45))
+        conf_msg = env.gw.messages[-1]
+        labels = [b[1] for row in (conf_msg[2] or []) for b in row]
+        assert "wiz:ai" in labels  # enhance button on the final confirm
+        await env.app.handle_callback(env.cb("wiz:ai", update_id=46))
+        prompt_seen, known_seen, _m = env.ai.calls[-1]
+        assert "glowing eyes" in prompt_seen and "on a rooftop" in prompt_seen
+        assert known_seen is False
+        await env.app.handle_callback(env.cb("wiz:y", update_id=47))
+        async with env.factory() as s:
+            job = (await s.execute(sa_select(Job).order_by(Job.id.desc()))).scalars().first()
+            await s.commit()
+        assert "ENHANCED PROMPT" in job.prompt_snapshot
+
+        # ---- undo keeps the original prompt ------------------------------
+        await env.app.handle_message(env.msg("/generate", update_id=50))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=51))
+        await env.app.handle_callback(env.cb("wiz:c:0", update_id=52))
+        await env.app.handle_message(env.msg("blue sky", update_id=53))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=54))
+        await env.app.handle_callback(env.cb("wiz:n:1", update_id=55))
+        await env.app.handle_callback(env.cb("wiz:ai", update_id=56))
+        await env.app.handle_callback(env.cb("wiz:aiundo", update_id=57))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=58))
+        async with env.factory() as s:
+            job = (await s.execute(sa_select(Job).order_by(Job.id.desc()))).scalars().first()
+            await s.commit()
+        assert "ENHANCED PROMPT" not in job.prompt_snapshot
+        assert "blue sky" in job.prompt_snapshot
+
+        # ---- known characters pass known=True ---------------------------
+        await env.app.handle_callback(env.cb(f"savec:{job_id}", update_id=60))
+        await env.app.handle_message(env.msg("tmp", update_id=61))
+        await env.app.handle_callback(env.cb("savec:k", update_id=62))
+        await env.app.handle_message(env.msg("Rem", update_id=63))
+        await env.app.handle_message(env.msg("Re:Zero", update_id=64))
+        await env.app.handle_callback(env.cb("savec:ai", update_id=65))
+        _p, known_seen, _m = env.ai.calls[-1]
+        assert known_seen is True
+
+        # ---- AI failure is reported, dialog survives --------------------
+        env.ai.fail_mode = "error"
+        await env.app.handle_callback(env.cb("savec:aiundo", update_id=66))
+        await env.app.handle_callback(env.cb("savec:ai", update_id=67))
+        assert any("در دسترس نیست" in m[1] for m in env.gw.messages[-2:])
+        d = await env.memory.get(ADMIN_ID)
+        assert d is not None  # dialog not destroyed
+
+        # ---- admin can switch the buttons off ---------------------------
+        env.ai.fail_mode = ""
+        from waifubot.db.models import Setting
+
+        async with env.factory() as s:
+            s.add(Setting(key="ai_enhance_enabled", value_json="0"))
+            await s.commit()
+        await env.app.handle_message(env.msg("/generate", update_id=70))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=71))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=72))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=73))
+        await env.app.handle_callback(env.cb("wiz:n:1", update_id=74))
+        conf_msg = env.gw.messages[-1]
+        labels = [b[1] for row in (conf_msg[2] or []) for b in row]
+        assert "wiz:ai" not in labels  # hidden when disabled
 
     _run(body())

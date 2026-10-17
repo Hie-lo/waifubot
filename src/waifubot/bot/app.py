@@ -36,6 +36,7 @@ from waifubot.bot.recovery import startup_recover
 from waifubot.bot.worker import GenerationWorker
 from waifubot.config import Settings, ensure_runtime_dirs
 from waifubot.core.admin_settings import AdminSettings
+from waifubot.core.ai_enhance import build_enhancer
 from waifubot.core.content_safety import load_blocklist
 from waifubot.core.identity import load_identity_pool
 from waifubot.core.image_pipeline import ImagePipeline
@@ -233,6 +234,9 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
         gate=gate,
         builder=builder,
         identity_pool=idpool,
+        enhancer=build_enhancer(
+            settings.anthropic_api_key, settings.ai_enhance_model
+        ),
         config=BotConfig(
             admin_ids=settings.admin_user_ids,
             dest_chat_id=settings.destination_chat_id,

@@ -46,6 +46,10 @@ SETTINGS_SPECS: tuple[SettingSpec, ...] = (
                 description="scheduler posting interval (Sprint 4)"),
     SettingSpec("retention_days", "int", 30, 1, 365,
                 description="retention for final images (Sprint 4 cleanup)"),
+    SettingSpec("ai_enhance_enabled", "int", 1, 0, 1,
+                description="1 = show the AI prompt-enhance buttons"),
+    SettingSpec("ai_enhance_model", "str", "claude-sonnet-4-5",
+                description="AI model used for prompt enhancement"),
 )
 
 SPECS_BY_KEY: dict[str, SettingSpec] = {s.key: s for s in SETTINGS_SPECS}

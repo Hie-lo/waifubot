@@ -28,6 +28,10 @@ class StorageError(WaifuBotError):
     code = "storage_error"
 
 
+class AiError(WaifuBotError):
+    code = "ai_error"
+
+
 class ProviderError(WaifuBotError):
     code = "provider_error"
 

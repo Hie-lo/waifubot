@@ -91,6 +91,10 @@ class Settings:
     db_url: str = "sqlite+aiosqlite:///./storage/waifubot.db"
     disk_floor_bytes: int = 2 * 1024**3
     log_level: str = "INFO"
+    # AI prompt enhancement (Stage 3). The key is a secret and stays in .env;
+    # the model default is admin-changeable via /settings (user rule).
+    anthropic_api_key: str = field(repr=False, default="")
+    ai_enhance_model: str = "claude-sonnet-4-5"
 
     @classmethod
     def from_env(
@@ -134,6 +138,8 @@ class Settings:
         if disk_floor_bytes < 0:
             raise ConfigError("DISK_FLOOR_BYTES must be >= 0")
 
+        anthropic_api_key = (e.get("ANTHROPIC_API_KEY") or "").strip()
+        ai_enhance_model = (e.get("AI_ENHANCE_MODEL") or "claude-sonnet-4-5").strip()
         log_level = e.get("LOG_LEVEL", "INFO").strip().upper()
         if log_level not in _LOG_LEVELS:
             raise ConfigError(f"LOG_LEVEL must be one of {_LOG_LEVELS}, got {log_level!r}")
@@ -155,6 +161,8 @@ class Settings:
             db_url=e.get("DB_URL", "sqlite+aiosqlite:///./storage/waifubot.db").strip(),
             disk_floor_bytes=disk_floor_bytes,
             log_level=log_level,
+            anthropic_api_key=anthropic_api_key,
+            ai_enhance_model=ai_enhance_model,
         )
 
 

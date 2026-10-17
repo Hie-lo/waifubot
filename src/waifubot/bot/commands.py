@@ -27,6 +27,7 @@ from waifubot.bot.posting import publish_group, publish_image, resolve_unknown_s
 from waifubot.bot.worker import GenerationWorker
 from waifubot.config import HARD_MAX_IMAGES_PER_JOB
 from waifubot.core.admin_settings import AdminSettings
+from waifubot.core.ai_enhance import AiEnhancer
 from waifubot.core.content_safety import validate_adult_identity
 from waifubot.core.identity import (
     TRAIT_ORDER,
@@ -39,7 +40,7 @@ from waifubot.core.identity import (
 )
 from waifubot.core.prompt_builder import PromptBuilder
 from waifubot.db.models import Character, Image, Job, Post
-from waifubot.errors import ConfigError, ValidationError
+from waifubot.errors import AiError, ConfigError, ValidationError
 from waifubot.services.generation import create_job
 
 log = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class BotApp:
         builder: PromptBuilder,
         config: BotConfig,
         identity_pool: IdentityPool,
+        enhancer: AiEnhancer | None = None,
     ) -> None:
         self._sessions = sessions
         self._settings = admin_settings
@@ -93,6 +95,7 @@ class BotApp:
         self._builder = builder
         self._cfg = config
         self._idpool = identity_pool
+        self._ai = enhancer
 
     # ---- dispatch ---------------------------------------------------------
     async def handle_message(self, inb: Inbound) -> None:
@@ -777,6 +780,39 @@ class BotApp:
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
             await self._ask_confirm(inb)
+        elif part == "ai":  # AI-enhance the final prompt (Stage 3)
+            await self._safe_answer(inb)
+            if not await self._ai_ready():
+                await self._gw.send_message(
+                    inb.chat_id,
+                    self._msgs.t("ai_error", error="disabled or not configured"),
+                )
+                return
+            base, _lock = await self._resolve_identity(dialog)
+            scene = dialog.get("scene") or ""
+            preview = f"{base}\n{scene}" if scene else base
+            known = bool(dialog.get("character_id"))
+            enhanced = await self._call_enhance(inb, preview, known=known)
+            if enhanced is None:
+                return
+            dialog["ai_prompt"] = enhanced
+            dialog["step"] = "confirm"
+            await self._memory.set(inb.user_id, dialog)
+            buttons: Buttons = [[
+                (self._msgs.t("wiz_confirm_yes"), "wiz:y"),
+                (self._msgs.t("ai_undo"), "wiz:aiundo"),
+                (self._msgs.t("wiz_cancel"), "wiz:x"),
+            ]]
+            await self._gw.send_message(
+                inb.chat_id,
+                f"{self._msgs.t('ai_enhanced_ask')}\n\n{enhanced}",
+                buttons=buttons,
+            )
+        elif part == "aiundo":  # back to the original (non-enhanced) prompt
+            dialog.pop("ai_prompt", None)
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._ask_confirm(inb)
         elif part == "y":
             await self._safe_answer(inb)
             if dialog.get("step") != "confirm":
@@ -818,14 +854,92 @@ class BotApp:
             inb.chat_id, self._msgs.t("wiz_count_ask"), buttons=_chunk(rows)
         )
 
+    async def _ai_ready(self) -> bool:
+        """AI enhance is available and not switched off by the admin."""
+        if self._ai is None:
+            return False
+        return bool(await self._settings.get_or("ai_enhance_enabled", 1))
+
+    async def _call_enhance(
+        self, inb: Inbound, text: str, *, known: bool
+    ) -> str | None:
+        """Run the fixed-instruction enhancement; None = it failed (user told)."""
+        if self._ai is None:
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("ai_error", error="not configured")
+            )
+            return None
+        model = await self._settings.get_or("ai_enhance_model", "")
+        try:
+            return await self._ai.enhance(text, known=known, model=str(model or ""))
+        except AiError as e:
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("ai_error", error=str(e))
+            )
+            return None
+        except Exception:  # noqa: BLE001
+            log.exception("ai enhance failed")
+            await self._gw.send_message(inb.chat_id, self._msgs.t("error_generic"))
+            return None
+
+    def _build_identity(self, dialog: dict) -> str:
+        """The character prompt this dialog represents (one source of truth)."""
+        if dialog.get("mode") == "known":
+            return known_character_prompt(
+                dialog.get("known_name") or "",
+                dialog.get("known_anime") or "",
+                self._idpool,
+            )
+        if dialog.get("precise"):
+            return assemble_identity(
+                self._idpool,
+                dialog.get("traits") or {},
+                extras=dialog.get("extras") or "",
+                precise=True,
+                name=dialog.get("name") or "",
+            )
+        return (dialog.get("identity") or "").strip()
+
     async def _ask_confirm(self, inb: Inbound) -> None:
-        buttons: Buttons = [
-            [(self._msgs.t("wiz_confirm_yes"), "wiz:y"),
-             (self._msgs.t("wiz_cancel"), "wiz:x")]
+        rows: list[tuple[str, str]] = [
+            (self._msgs.t("wiz_confirm_yes"), "wiz:y"),
+            (self._msgs.t("wiz_cancel"), "wiz:x"),
         ]
+        if await self._ai_ready():
+            rows.append((self._msgs.t("ai_enhance"), "wiz:ai"))
+        buttons: Buttons = [rows]
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_confirm_ask"), buttons=buttons
         )
+
+    async def _resolve_identity(self, dialog: dict) -> tuple[str, str | None]:
+        """(identity, style_lock) for a generate dialog — shared by the AI
+        preview and the final confirm so both see the SAME prompt."""
+        character_id = dialog.get("character_id")
+        identity = dialog.get("identity") or ""
+        style_lock: str | None = None
+        if character_id:
+            async with self._sessions() as s:
+                row = await s.get(Character, character_id)
+                if row is None:
+                    raise ValidationError("character not found")
+                identity = row.identity_prompt
+                style_lock = row.style_lock or None
+        if not identity:
+            async with self._sessions() as s:
+                row = (
+                    await s.execute(
+                        select(Character)
+                        .where(Character.is_active.is_(True))
+                        .order_by(func.random()).limit(1)
+                    )
+                ).scalars().first()
+                identity = (
+                    row.identity_prompt if row
+                    else random_identity(self._idpool)  # diverse per job
+                )
+                style_lock = (row.style_lock or None) if row else None
+        return identity, style_lock
 
     async def _confirm_generate(self, inb: Inbound, dialog: dict) -> None:
         try:
@@ -842,30 +956,15 @@ class BotApp:
                 # admin's default_style setting decides — never surprise-random
                 style_key = await self._settings.get("default_style") or ""
                 style_value = self._cfg.style_values.get(style_key, "")
-            character_id = dialog.get("character_id")
-            identity = dialog.get("identity") or ""
-            style_lock: str | None = None
-            if character_id:
-                async with self._sessions() as s:
-                    row = await s.get(Character, character_id)
-                    if row is None:
-                        raise ValidationError("character not found")
-                    identity = row.identity_prompt
-                    style_lock = row.style_lock or None
-            if not identity:
-                async with self._sessions() as s:
-                    row = (
-                        await s.execute(
-                            select(Character)
-                            .where(Character.is_active.is_(True))
-                            .order_by(func.random()).limit(1)
-                        )
-                    ).scalars().first()
-                    identity = (
-                        row.identity_prompt if row
-                        else random_identity(self._idpool)  # diverse per job
-                    )
-                    style_lock = (row.style_lock or None) if row else None
+            identity, style_lock = await self._resolve_identity(dialog)
+            # AI-enhanced prompt (Stage 3) replaces the composed one verbatim;
+            # the scene was merged into the enhanced text at wiz:ai time.
+            ai_prompt = (dialog.get("ai_prompt") or "").strip()
+            if ai_prompt:
+                identity = ai_prompt
+                admin_text = ""
+            else:
+                admin_text = dialog.get("scene") or ""
             validate_adult_identity(identity, self._cfg.blocklist)
             default_count = await self._settings.get_or("images_per_job", 4)
             count = (
@@ -885,7 +984,7 @@ class BotApp:
                     style_lock=style_lock,
                     count=min(count, max_images),
                     style_value=style_value,
-                    admin_text=dialog.get("scene") or "",
+                    admin_text=admin_text,
                     idempotency_key=f"tg:{inb.update_id}",
                     requested_by=f"tg:{inb.user_id}",
                     max_images_per_job=max_images,
@@ -1088,6 +1187,37 @@ class BotApp:
             await self._gw.send_message(
                 inb.chat_id, self._msgs.t("savec_custom_ask")
             )
+        elif action == "ai":  # AI-enhance the character prompt
+            await self._safe_answer(inb)
+            if not await self._ai_ready():
+                await self._gw.send_message(
+                    inb.chat_id,
+                    self._msgs.t("ai_error", error="disabled or not configured"),
+                )
+                return
+            base = (dialog.get("final_identity") or "").strip()
+            if not base:
+                base = self._build_identity(dialog)
+            enhanced = await self._call_enhance(
+                inb, base, known=dialog.get("mode") == "known"
+            )
+            if enhanced is None:
+                return
+            dialog["ai_identity"] = enhanced
+            await self._memory.set(inb.user_id, dialog)
+            await self._savec_review(inb, dialog, rebuild=False)
+        elif action == "aiok":  # apply the AI version as the final prompt
+            dialog["final_identity"] = (
+                dialog.pop("ai_identity", "") or dialog.get("final_identity", "")
+            )
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._savec_review(inb, dialog, rebuild=False)
+        elif action == "aiundo":  # discard the AI version
+            dialog.pop("ai_identity", None)
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._savec_review(inb, dialog, rebuild=True)
         elif action == "ok":
             await self._safe_answer(inb)
             await self._savec_commit(inb, dialog)
@@ -1125,29 +1255,33 @@ class BotApp:
             inb.chat_id, self._msgs.t("savec_extras_ask"), buttons=buttons
         )
 
-    async def _savec_review(self, inb: Inbound, dialog: dict) -> None:
-        if dialog.get("mode") == "known":
-            dialog["final_identity"] = known_character_prompt(
-                dialog.get("known_name") or "",
-                dialog.get("known_anime") or "",
-                self._idpool,
-            )
-        elif dialog.get("precise"):
-            dialog["final_identity"] = assemble_identity(
-                self._idpool,
-                dialog.get("traits") or {},
-                extras=dialog.get("extras") or "",
-                precise=True,
-                name=dialog.get("name") or "",
-            )
-        else:
-            dialog["final_identity"] = (dialog.get("identity") or "").strip()
+    async def _savec_review(
+        self, inb: Inbound, dialog: dict, *, rebuild: bool = True
+    ) -> None:
+        if rebuild or not (dialog.get("final_identity") or "").strip():
+            dialog["final_identity"] = self._build_identity(dialog)
         dialog["step"] = "review"
         await self._memory.set(inb.user_id, dialog)
-        buttons: Buttons = [
-            [(self._msgs.t("savec_confirm"), "savec:ok"),
-             (self._msgs.t("wiz_cancel"), "wiz:x")],
+        ai_pending = (dialog.get("ai_identity") or "").strip()
+        if ai_pending:
+            # show the AI version with accept/undo (user compares in chat)
+            buttons: Buttons = [[
+                (self._msgs.t("ai_apply"), "savec:aiok"),
+                (self._msgs.t("ai_undo"), "savec:aiundo"),
+            ]]
+            await self._gw.send_message(
+                inb.chat_id,
+                f"{self._msgs.t('ai_enhanced_ask')}\n\n{ai_pending}",
+                buttons=buttons,
+            )
+            return
+        rows: list[tuple[str, str]] = [
+            (self._msgs.t("savec_confirm"), "savec:ok"),
+            (self._msgs.t("wiz_cancel"), "wiz:x"),
         ]
+        if await self._ai_ready():
+            rows.append((self._msgs.t("ai_enhance"), "savec:ai"))
+        buttons = [rows]
         await self._gw.send_message(
             inb.chat_id,
             f"{self._msgs.t('savec_review_ask')}\n\n{dialog['final_identity']}",
@@ -1157,22 +1291,7 @@ class BotApp:
     async def _savec_commit(self, inb: Inbound, dialog: dict) -> None:
         identity = (dialog.get("final_identity") or "").strip()
         if not identity:  # OK can be pressed before the review screen
-            if dialog.get("mode") == "known":
-                identity = known_character_prompt(
-                    dialog.get("known_name") or "",
-                    dialog.get("known_anime") or "",
-                    self._idpool,
-                )
-            elif dialog.get("precise"):
-                identity = assemble_identity(
-                    self._idpool,
-                    dialog.get("traits") or {},
-                    extras=dialog.get("extras") or "",
-                    precise=True,
-                    name=dialog.get("name") or "",
-                )
-            else:
-                identity = (dialog.get("identity") or "").strip()
+            identity = self._build_identity(dialog)
         try:
             validate_adult_identity(identity, self._cfg.blocklist)
         except ValidationError as e:
