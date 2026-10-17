@@ -1,6 +1,7 @@
 """Unit tests for generation service and exact-count gate (R9, R38)."""
 
 import unittest
+
 from waifubot.core.models import GenerationJob, ImageAsset, JobErrorCode, JobStatus
 from waifubot.services.generation import manual_retry_job, process_job_batch
 
@@ -58,7 +59,9 @@ class TestGenerationService(unittest.TestCase):
             zero_progress_limit=2,
         )
         # Round 1: adds 2 images
-        process_job_batch(job, [ImageAsset(content=b"1", sha256="h1"), ImageAsset(content=b"2", sha256="h2")])
+        process_job_batch(
+            job, [ImageAsset(content=b"1", sha256="h1"), ImageAsset(content=b"2", sha256="h2")]
+        )
         self.assertEqual(job.zero_progress_streak, 0)
 
         # Round 2: zero new images

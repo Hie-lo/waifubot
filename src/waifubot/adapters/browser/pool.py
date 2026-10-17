@@ -1,13 +1,11 @@
 """Browser slot pool: one Chromium instance managing isolated browser contexts (R35, ADR-0003)."""
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
-
-from waifubot.core.ports import ProviderSlot
 
 
 class BrowserSlot:
@@ -34,7 +32,7 @@ class BrowserSlot:
         if self.storage_state_path and hasattr(self.context, "storage_state"):
             try:
                 self.storage_state_path.parent.mkdir(parents=True, exist_ok=True)
-                state = await self.context.storage_state(path=str(self.storage_state_path))
+                await self.context.storage_state(path=str(self.storage_state_path))
             except Exception:
                 pass
 
@@ -132,17 +130,13 @@ class BrowserSlotPool:
         self._slots.clear()
 
         if self._browser is not None:
-            try:
+            with suppress(Exception):
                 await self._browser.close()
-            except Exception:
-                pass
             self._browser = None
 
         if self._playwright is not None:
-            try:
+            with suppress(Exception):
                 await self._playwright.stop()
-            except Exception:
-                pass
             self._playwright = None
 
         self._initialized = False

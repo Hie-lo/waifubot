@@ -1,11 +1,11 @@
 """Unit tests for multi-schedule channel posting, Jalali dates, and missed-run policies (R45)."""
 
-from datetime import datetime
 import os
 import shutil
 import tempfile
 import time
 import unittest
+from datetime import datetime
 
 from waifubot.db.session import create_engine_and_sessionmaker, init_db
 from waifubot.services.scheduler import (
@@ -75,25 +75,33 @@ class TestSchedulerService(unittest.IsolatedAsyncioTestCase):
         """Verifies trigger evaluation and policies (catch_up_one vs skip)."""
         now = time.time()
         # Schedule in the future should not trigger
-        future_sched = type("MockSchedule", (), {
-            "is_running": True,
-            "next_at": now + 500,
-            "min_gap_minutes": 10,
-            "max_gap_minutes": 20,
-            "missed_run_policy": "catch_up_one",
-        })()
+        future_sched = type(
+            "MockSchedule",
+            (),
+            {
+                "is_running": True,
+                "next_at": now + 500,
+                "min_gap_minutes": 10,
+                "max_gap_minutes": 20,
+                "missed_run_policy": "catch_up_one",
+            },
+        )()
         should_run, next_at = evaluate_schedule_trigger(future_sched, now)
         self.assertFalse(should_run)
         self.assertEqual(next_at, now + 500)
 
         # Schedule past due (missed run due to downtime)
-        past_sched = type("MockSchedule", (), {
-            "is_running": True,
-            "next_at": now - 3600,
-            "min_gap_minutes": 30,
-            "max_gap_minutes": 60,
-            "missed_run_policy": "catch_up_one",
-        })()
+        past_sched = type(
+            "MockSchedule",
+            (),
+            {
+                "is_running": True,
+                "next_at": now - 3600,
+                "min_gap_minutes": 30,
+                "max_gap_minutes": 60,
+                "missed_run_policy": "catch_up_one",
+            },
+        )()
         should_run, new_next_at = evaluate_schedule_trigger(past_sched, now)
         self.assertTrue(should_run)
         self.assertGreaterEqual(new_next_at, now + (30 * 60))
@@ -102,28 +110,27 @@ class TestSchedulerService(unittest.IsolatedAsyncioTestCase):
         """Verifies multi-schedule independent lifecycles and query filtering (R45)."""
         now = time.time()
 
-        async with self.session_factory() as session:
-            async with session.begin():
-                s1 = await create_schedule(
-                    session=session,
-                    channel_id=-100111111,
-                    topic_id=None,
-                    post_count=2,
-                    min_gap_minutes=60,
-                    max_gap_minutes=120,
-                    first_run_at=now - 100,  # due now
-                )
-                s2 = await create_schedule(
-                    session=session,
-                    channel_id=-100222222,
-                    topic_id=42,
-                    post_count=1,
-                    min_gap_minutes=30,
-                    max_gap_minutes=60,
-                    first_run_at=now + 500,  # future
-                )
-                s1_id = s1.id
-                s2_id = s2.id
+        async with self.session_factory() as session, session.begin():
+            s1 = await create_schedule(
+                session=session,
+                channel_id=-100111111,
+                topic_id=None,
+                post_count=2,
+                min_gap_minutes=60,
+                max_gap_minutes=120,
+                first_run_at=now - 100,  # due now
+            )
+            s2 = await create_schedule(
+                session=session,
+                channel_id=-100222222,
+                topic_id=42,
+                post_count=1,
+                min_gap_minutes=30,
+                max_gap_minutes=60,
+                first_run_at=now + 500,  # future
+            )
+            s1_id = s1.id
+            s2_id = s2.id
 
         # Query due schedules
         async with self.session_factory() as session:

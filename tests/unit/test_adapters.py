@@ -1,6 +1,5 @@
 """Unit tests for adapters, presentation helpers, and composition root."""
 
-import asyncio
 import os
 import shutil
 import tempfile
@@ -12,7 +11,7 @@ from waifubot.adapters.http import STANDARD_BROWSER_HEADERS, get_standard_browse
 from waifubot.adapters.providers.mock import MockGenerationProvider, MockSlot, MockSlotPool
 from waifubot.adapters.storage.local_fs import LocalFsImageStore
 from waifubot.adapters.storage.memory import MemoryImageStore
-from waifubot.bot.app import AppConfig, BotContainer, create_app
+from waifubot.bot.app import BotContainer, create_app
 from waifubot.bot.telegram_html import bold, code, escape_html, italic, link, pre, spoiler
 from waifubot.bot.topics import extract_thread_id, format_chat_and_topic
 
@@ -129,11 +128,14 @@ class TestAdaptersAndBot(unittest.IsolatedAsyncioTestCase):
             pre("code", "python"),
             '<pre><code class="language-python">code</code></pre>',
         )
-        self.assertEqual(link("Google", "https://google.com"), '<a href="https://google.com">Google</a>')
+        self.assertEqual(
+            link("Google", "https://google.com"), '<a href="https://google.com">Google</a>'
+        )
         self.assertEqual(spoiler("secret"), '<span class="tg-spoiler">secret</span>')
 
     def test_telegram_topics(self) -> None:
         """Verify forum topic extraction and formatting."""
+
         class DummyMsg:
             message_thread_id = 42
 

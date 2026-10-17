@@ -41,7 +41,7 @@ class InviteExpiredError(Exception):
 
 async def seed_admins(session: AsyncSession, admin_ids: list[int]) -> int:
     """Inserts admins from ADMIN_IDS that are missing from the admins table.
-    
+
     Invariants:
     - Inserts as superadmin.
     - Never changes roles of existing admins.
@@ -95,7 +95,7 @@ async def add_or_restore_admin(
     if existing is not None:
         if existing.removed_at is None:
             raise AdminAlreadyExistsError(f"Admin with telegram_id {telegram_id} is already active")
-        
+
         # Restore soft-removed admin
         old_role = existing.role
         existing.removed_at = None
@@ -212,11 +212,7 @@ async def set_admin_role(
 
 async def list_active_admins(session: AsyncSession) -> list[AdminRecord]:
     """Returns all active (non-removed) admins."""
-    stmt = (
-        select(AdminRecord)
-        .where(AdminRecord.removed_at.is_(None))
-        .order_by(AdminRecord.id)
-    )
+    stmt = select(AdminRecord).where(AdminRecord.removed_at.is_(None)).order_by(AdminRecord.id)
     res = await session.execute(stmt)
     return list(res.scalars().all())
 

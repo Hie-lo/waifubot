@@ -16,7 +16,6 @@ from waifubot.services.image_pipeline import (
     compute_dhash,
     filter_image_candidate,
     hamming_distance,
-    is_near_duplicate,
     persist_image_with_provenance,
 )
 
@@ -53,7 +52,7 @@ class TestImagePipeline(unittest.IsolatedAsyncioTestCase):
         """pHash distinguishes shapes and detects close visual variants (R47)."""
         img1 = make_test_image_bytes("circle", "black")
         img2 = make_test_image_bytes("circle", "#222222")  # very close shade
-        img3 = make_test_image_bytes("rect", "black")       # distinct shape
+        img3 = make_test_image_bytes("rect", "black")  # distinct shape
 
         h1 = compute_dhash(img1)
         h2 = compute_dhash(img2)
@@ -86,7 +85,9 @@ class TestImagePipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res_near.rejection_reason, "near_duplicate")
 
         # 3. Distinct image accepted
-        res_distinct = filter_image_candidate(img3_distinct, existing_sha, existing_phashes, phash_distance=6)
+        res_distinct = filter_image_candidate(
+            img3_distinct, existing_sha, existing_phashes, phash_distance=6
+        )
         self.assertTrue(res_distinct.accepted)
         self.assertIsNone(res_distinct.rejection_reason)
 
@@ -94,20 +95,19 @@ class TestImagePipeline(unittest.IsolatedAsyncioTestCase):
         """persist_image_with_provenance stores image atomically and records full provenance (R43)."""
         img_bytes = make_test_image_bytes("circle", "blue")
 
-        async with self.session_factory() as session:
-            async with session.begin():
-                record = await persist_image_with_provenance(
-                    session=session,
-                    image_store=self.store,
-                    data=img_bytes,
-                    job_id="job-prov-1",
-                    final_prompt="1girl, rem, maid outfit",
-                    negative_prompt="bad quality",
-                    seed="123456",
-                    provider="perchance",
-                    provider_version="v1.2",
-                    is_enhanced=True,
-                )
+        async with self.session_factory() as session, session.begin():
+            await persist_image_with_provenance(
+                session=session,
+                image_store=self.store,
+                data=img_bytes,
+                job_id="job-prov-1",
+                final_prompt="1girl, rem, maid outfit",
+                negative_prompt="bad quality",
+                seed="123456",
+                provider="perchance",
+                provider_version="v1.2",
+                is_enhanced=True,
+            )
 
         # Verify in DB
         async with self.session_factory() as session:

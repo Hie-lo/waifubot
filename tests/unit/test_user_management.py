@@ -3,10 +3,12 @@
 import os
 import shutil
 import tempfile
-import time
 import unittest
 
-from waifubot.bot.auth import check_access_and_notify, reset_blocked_notices, resolve_request_context
+from waifubot.bot.auth import (
+    check_access_and_notify,
+    reset_blocked_notices,
+)
 from waifubot.bot.handlers.users import UserManagementHandler
 from waifubot.db.session import create_engine_and_sessionmaker, init_db
 from waifubot.services.admins import seed_admins
@@ -18,7 +20,6 @@ from waifubot.services.users import (
     get_users_overview,
     list_users,
     record_user_seen,
-    set_user_locale,
     set_user_note,
     unblock_user,
 )
@@ -77,14 +78,13 @@ class TestUserManagement(unittest.IsolatedAsyncioTestCase):
 
     async def test_overview_metrics_and_list_filtering(self) -> None:
         """Overview counts and filter tabs (all, active, blocked, new) return correct counts."""
-        async with self.session_factory() as session:
-            async with session.begin():
-                # 3 active users, 1 blocked user
-                await record_user_seen(session, 101, "User 1", "u1")
-                await record_user_seen(session, 102, "User 2", "u2")
-                await record_user_seen(session, 103, "User 3", "u3")
-                await record_user_seen(session, 104, "User 4", "u4")
-                await block_user(session, 104, reason="Spam", admin_id=999)
+        async with self.session_factory() as session, session.begin():
+            # 3 active users, 1 blocked user
+            await record_user_seen(session, 101, "User 1", "u1")
+            await record_user_seen(session, 102, "User 2", "u2")
+            await record_user_seen(session, 103, "User 3", "u3")
+            await record_user_seen(session, 104, "User 4", "u4")
+            await block_user(session, 104, reason="Spam", admin_id=999)
 
         async with self.session_factory() as session:
             stats = await get_users_overview(session)
@@ -124,11 +124,10 @@ class TestUserManagement(unittest.IsolatedAsyncioTestCase):
 
     async def test_user_card_actions_and_profile_deletion(self) -> None:
         """Note setting, unblocking, and full record deletion lifecycle."""
-        async with self.session_factory() as session:
-            async with session.begin():
-                await record_user_seen(session, 555, "Bob", "bob555")
-                await block_user(session, 555, reason="Violation", admin_id=1001)
-                await set_user_note(session, 555, note="Watch closely", admin_id=1001)
+        async with self.session_factory() as session, session.begin():
+            await record_user_seen(session, 555, "Bob", "bob555")
+            await block_user(session, 555, reason="Violation", admin_id=1001)
+            await set_user_note(session, 555, note="Watch closely", admin_id=1001)
 
         async with self.session_factory() as session:
             u = await get_user(session, 555)
@@ -157,10 +156,9 @@ class TestUserManagement(unittest.IsolatedAsyncioTestCase):
         """Blocked user receives blocked_notice exactly once per session and is rejected (R50)."""
         mock_bot = MockBot()
 
-        async with self.session_factory() as session:
-            async with session.begin():
-                await record_user_seen(session, 777, "Eve", "eve_tg")
-                await block_user(session, 777, reason="Abuse", admin_id=1001)
+        async with self.session_factory() as session, session.begin():
+            await record_user_seen(session, 777, "Eve", "eve_tg")
+            await block_user(session, 777, reason="Abuse", admin_id=1001)
 
         # First interaction: rejected, notice sent
         async with self.session_factory() as session:
@@ -210,7 +208,9 @@ class TestUserManagement(unittest.IsolatedAsyncioTestCase):
             self.assertIn("نمای کلی کاربران", text_ovw)
             self.assertTrue(len(kbd_ovw) >= 3)
 
-            text_list, kbd_list = await handler.render_user_list(session, filter_type="all", locale="fa")
+            text_list, kbd_list = await handler.render_user_list(
+                session, filter_type="all", locale="fa"
+            )
             self.assertIn("لیست کاربران", text_list)
             self.assertIn("charlie_tg", text_list)
 

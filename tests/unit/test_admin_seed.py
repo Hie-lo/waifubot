@@ -3,7 +3,6 @@
 import os
 import shutil
 import tempfile
-import time
 import unittest
 
 from waifubot.db.session import create_engine_and_sessionmaker, init_db
@@ -35,10 +34,9 @@ class TestAdminSeed(unittest.IsolatedAsyncioTestCase):
         """Missing admin IDs are inserted as superadmin with audit log."""
         admin_ids = [1001, 1002]
 
-        async with self.session_factory() as session:
-            async with session.begin():
-                count = await seed_admins(session, admin_ids)
-                self.assertEqual(count, 2)
+        async with self.session_factory() as session, session.begin():
+            count = await seed_admins(session, admin_ids)
+            self.assertEqual(count, 2)
 
         async with self.session_factory() as session:
             admins = await list_active_admins(session)
@@ -56,17 +54,15 @@ class TestAdminSeed(unittest.IsolatedAsyncioTestCase):
         admin_ids = [1001, 1002]
 
         # First seed
-        async with self.session_factory() as session:
-            async with session.begin():
-                await seed_admins(session, admin_ids)
-                # Demote 1002 to regular admin (with 1001 remaining as superadmin)
-                await set_admin_role(session, telegram_id=1002, new_role="admin", actor_id=1001)
+        async with self.session_factory() as session, session.begin():
+            await seed_admins(session, admin_ids)
+            # Demote 1002 to regular admin (with 1001 remaining as superadmin)
+            await set_admin_role(session, telegram_id=1002, new_role="admin", actor_id=1001)
 
         # Second seed at next startup
-        async with self.session_factory() as session:
-            async with session.begin():
-                count = await seed_admins(session, admin_ids)
-                self.assertEqual(count, 0)  # No new admins inserted
+        async with self.session_factory() as session, session.begin():
+            count = await seed_admins(session, admin_ids)
+            self.assertEqual(count, 0)  # No new admins inserted
 
         # Verify 1002 stayed as 'admin' and was NOT overwritten to superadmin
         async with self.session_factory() as session:
@@ -80,20 +76,17 @@ class TestAdminSeed(unittest.IsolatedAsyncioTestCase):
         admin_ids = [1001, 1002]
 
         # Seed both
-        async with self.session_factory() as session:
-            async with session.begin():
-                await seed_admins(session, admin_ids)
+        async with self.session_factory() as session, session.begin():
+            await seed_admins(session, admin_ids)
 
         # Remove 1002 (soft-disable)
-        async with self.session_factory() as session:
-            async with session.begin():
-                await remove_admin(session, telegram_id=1002, actor_id=1001)
+        async with self.session_factory() as session, session.begin():
+            await remove_admin(session, telegram_id=1002, actor_id=1001)
 
         # Startup seed runs again with same admin_ids
-        async with self.session_factory() as session:
-            async with session.begin():
-                count = await seed_admins(session, admin_ids)
-                self.assertEqual(count, 0)
+        async with self.session_factory() as session, session.begin():
+            count = await seed_admins(session, admin_ids)
+            self.assertEqual(count, 0)
 
         # Verify 1002 is still inactive / soft-removed
         async with self.session_factory() as session:

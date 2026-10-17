@@ -1,6 +1,7 @@
 """Database models: persistent JobRecord and schema entities."""
 
 import time
+
 from sqlalchemy import BigInteger, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -113,7 +114,9 @@ class ScheduleRecord(Base):
     max_gap_minutes: Mapped[int] = mapped_column(Integer, default=180, nullable=False)
     next_at: Mapped[float] = mapped_column(Float, index=True, nullable=False)
     is_running: Mapped[bool] = mapped_column(default=True, nullable=False)
-    missed_run_policy: Mapped[str] = mapped_column(String(32), default="catch_up_one", nullable=False)
+    missed_run_policy: Mapped[str] = mapped_column(
+        String(32), default="catch_up_one", nullable=False
+    )
     created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
 
@@ -139,7 +142,9 @@ class AdminRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
-    role: Mapped[str] = mapped_column(String(32), default="admin", nullable=False)  # admin | superadmin
+    role: Mapped[str] = mapped_column(
+        String(32), default="admin", nullable=False
+    )  # admin | superadmin
     added_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
     removed_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
@@ -157,7 +162,9 @@ class UserRecord(Base):
     locale: Mapped[str] = mapped_column(String(8), default="fa", nullable=False)
     first_seen: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
     last_seen: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", index=True, nullable=False)  # active | blocked
+    status: Mapped[str] = mapped_column(
+        String(32), default="active", index=True, nullable=False
+    )  # active | blocked
     block_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     joined_via: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -175,5 +182,3 @@ class AdminInviteRecord(Base):
     expires_at: Mapped[float] = mapped_column(Float, index=True, nullable=False)
     used_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     used_at: Mapped[float | None] = mapped_column(Float, nullable=True)
-
-

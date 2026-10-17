@@ -8,11 +8,10 @@ Contract:
 - Only reviewed pool images are scheduled.
 """
 
-from datetime import datetime
 import random
 import time
-from typing import Any
 import zoneinfo
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +21,7 @@ from waifubot.db.models import ScheduleRecord
 
 def gregorian_to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
     """Converts a Gregorian date (year, month, day) to Jalali (Solar Hijri) calendar.
-    
+
     Zero third-party dependencies, standard astronomical conversion.
     """
     g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
@@ -33,7 +32,15 @@ def gregorian_to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
         jy = 0
         gy -= 621
     gy2 = gy + 1 if gm > 2 else gy
-    days = (365 * gy) + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) - 80 + gd + g_d_m[gm - 1]
+    days = (
+        (365 * gy)
+        + ((gy2 + 3) // 4)
+        - ((gy2 + 99) // 100)
+        + ((gy2 + 399) // 400)
+        - 80
+        + gd
+        + g_d_m[gm - 1]
+    )
     jy += 33 * (days // 12053)
     days %= 12053
     jy += 4 * (days // 1461)
@@ -94,7 +101,7 @@ def evaluate_schedule_trigger(
     now: float,
 ) -> tuple[bool, float]:
     """Evaluates whether a schedule should trigger at `now` and calculates the new next_at.
-    
+
     Policies:
     - catch_up_one: Fires at most once for missed time, next schedule moves forward from now.
     - skip: Skips past missed window, next schedule moves forward from now.

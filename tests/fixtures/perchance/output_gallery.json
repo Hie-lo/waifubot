@@ -1,0 +1,20 @@
+{
+    "status": "success",
+    "prompt": "masterpiece, anime girl with blue eyes, kimono",
+    "negative_prompt": "low quality, blurry, deformed",
+    "seed": 421890,
+    "images": [
+        {
+            "id": "img_001",
+            "url": "https://perchance.org/gen/output_001.png",
+            "width": 512,
+            "height": 768
+        },
+        {
+            "id": "img_002",
+            "url": "https://perchance.org/gen/output_002.png",
+            "width": 512,
+            "height": 768
+        }
+    ]
+}

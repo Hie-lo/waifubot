@@ -1,6 +1,7 @@
 """Atomic claiming service with durable lease and fair round-robin scheduling (ADR-0002, R34, R36, R55)."""
 
 import asyncio
+import contextlib
 import random
 import time
 from typing import Any
@@ -151,10 +152,8 @@ class HeartbeatTask:
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
 
     async def _run_loop(self) -> None:
         while self._running:
@@ -163,17 +162,16 @@ class HeartbeatTask:
             delay = self.base_interval * jitter
             try:
                 await asyncio.sleep(delay)
-                async with self.session_factory() as session:
-                    async with session.begin():
-                        renewed = await renew_job_lease(
-                            session=session,
-                            job_id=self.job_id,
-                            worker_id=self.worker_id,
-                            lease_duration_seconds=self.lease_duration,
-                        )
-                        if not renewed:
-                            # Lost lease or job status changed
-                            break
+                async with self.session_factory() as session, session.begin():
+                    renewed = await renew_job_lease(
+                        session=session,
+                        job_id=self.job_id,
+                        worker_id=self.worker_id,
+                        lease_duration_seconds=self.lease_duration,
+                    )
+                    if not renewed:
+                        # Lost lease or job status changed
+                        break
             except asyncio.CancelledError:
                 break
             except Exception:

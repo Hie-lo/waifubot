@@ -82,11 +82,11 @@ def parse_compaction_response(raw_response: str) -> dict[str, Any]:
     raw = raw_response.strip()
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as err:
         # Fallback: extract the outermost JSON block using regex
         match = re.search(r"\{[\s\S]*\}", raw)
         if not match:
-            raise ValueError(f"No JSON found in compaction response: {raw[:100]}...")
+            raise ValueError(f"No JSON found in compaction response: {raw[:100]}...") from err
         data = json.loads(match.group(0))
 
     if not isinstance(data, dict):

@@ -31,16 +31,15 @@ class TestCharacterIdentity(unittest.IsolatedAsyncioTestCase):
 
     async def test_character_creation_and_versioning(self) -> None:
         """Creating an edit spawns version 2, unmarks version 1 as current, and links via edit_of (R18)."""
-        async with self.session_factory() as session:
-            async with session.begin():
-                char_v1 = await create_character(
-                    session=session,
-                    name="Toki",
-                    appearance_facts="blonde hair, blue eyes, slim build",
-                    created_by=101,
-                )
-                v1_id = char_v1.id
-                char_stable_id = char_v1.character_id
+        async with self.session_factory() as session, session.begin():
+            char_v1 = await create_character(
+                session=session,
+                name="Toki",
+                appearance_facts="blonde hair, blue eyes, slim build",
+                created_by=101,
+            )
+            v1_id = char_v1.id
+            char_stable_id = char_v1.character_id
 
         # Verify version 1 is current
         async with self.session_factory() as session:
@@ -52,13 +51,12 @@ class TestCharacterIdentity(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(curr.edit_of)
 
         # Create new version 2 (editing appearance)
-        async with self.session_factory() as session:
-            async with session.begin():
-                char_v2 = await create_new_version(
-                    session=session,
-                    parent_id=v1_id,
-                    new_appearance_facts="blonde hair in ponytail, blue eyes, athletic build",
-                )
+        async with self.session_factory() as session, session.begin():
+            await create_new_version(
+                session=session,
+                parent_id=v1_id,
+                new_appearance_facts="blonde hair in ponytail, blue eyes, athletic build",
+            )
 
         # Verify version 2 is current and version 1 is retired
         async with self.session_factory() as session:

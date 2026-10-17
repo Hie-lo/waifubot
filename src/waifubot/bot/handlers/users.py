@@ -11,11 +11,11 @@ Contract:
 """
 
 from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from waifubot.bot.callbacks import NavCallback, UserCallback
 from waifubot.bot.telegram_html import bold, code, escape_html
-from waifubot.services.admins import is_superadmin
 from waifubot.services.scheduler import format_jalali_datetime
 from waifubot.services.users import (
     CannotBlockAdminError,
@@ -24,7 +24,6 @@ from waifubot.services.users import (
     get_user,
     get_users_overview,
     list_users,
-    set_user_note,
     unblock_user,
 )
 
@@ -43,23 +42,46 @@ class UserManagementHandler:
         lines = [
             f"👥 {bold('نمای کلی کاربران' if locale == 'fa' else 'Users Overview')}",
             "",
-            f"• کل کاربران: {bold(str(stats['total']))}" if locale == "fa" else f"• Total users: {bold(str(stats['total']))}",
-            f"• فعال در ۲۴ ساعت گذشته: {bold(str(stats['active_today']))}" if locale == "fa" else f"• Active today: {bold(str(stats['active_today']))}",
-            f"• کاربران جدید این هفته: {bold(str(stats['new_this_week']))}" if locale == "fa" else f"• New this week: {bold(str(stats['new_this_week']))}",
-            f"• مسدود شده‌ها: {bold(str(stats['blocked']))}" if locale == "fa" else f"• Blocked: {bold(str(stats['blocked']))}",
+            f"• کل کاربران: {bold(str(stats['total']))}"
+            if locale == "fa"
+            else f"• Total users: {bold(str(stats['total']))}",
+            f"• فعال در ۲۴ ساعت گذشته: {bold(str(stats['active_today']))}"
+            if locale == "fa"
+            else f"• Active today: {bold(str(stats['active_today']))}",
+            f"• کاربران جدید این هفته: {bold(str(stats['new_this_week']))}"
+            if locale == "fa"
+            else f"• New this week: {bold(str(stats['new_this_week']))}",
+            f"• مسدود شده‌ها: {bold(str(stats['blocked']))}"
+            if locale == "fa"
+            else f"• Blocked: {bold(str(stats['blocked']))}",
         ]
 
         keyboard: list[list[dict[str, Any]]] = [
             [
-                {"text": "📋 همه" if locale == "fa" else "📋 All", "callback_data": UserCallback(action="list", extra="all:0").pack()},
-                {"text": "✅ فعال" if locale == "fa" else "✅ Active", "callback_data": UserCallback(action="list", extra="active:0").pack()},
+                {
+                    "text": "📋 همه" if locale == "fa" else "📋 All",
+                    "callback_data": UserCallback(action="list", extra="all:0").pack(),
+                },
+                {
+                    "text": "✅ فعال" if locale == "fa" else "✅ Active",
+                    "callback_data": UserCallback(action="list", extra="active:0").pack(),
+                },
             ],
             [
-                {"text": "⛔ مسدود" if locale == "fa" else "⛔ Blocked", "callback_data": UserCallback(action="list", extra="blocked:0").pack()},
-                {"text": "✨ جدید" if locale == "fa" else "✨ New", "callback_data": UserCallback(action="list", extra="new:0").pack()},
+                {
+                    "text": "⛔ مسدود" if locale == "fa" else "⛔ Blocked",
+                    "callback_data": UserCallback(action="list", extra="blocked:0").pack(),
+                },
+                {
+                    "text": "✨ جدید" if locale == "fa" else "✨ New",
+                    "callback_data": UserCallback(action="list", extra="new:0").pack(),
+                },
             ],
             [
-                {"text": "🔙 بازگشت" if locale == "fa" else "🔙 Back", "callback_data": NavCallback(action="back", target="settings").pack()}
+                {
+                    "text": "🔙 بازگشت" if locale == "fa" else "🔙 Back",
+                    "callback_data": NavCallback(action="back", target="settings").pack(),
+                }
             ],
         ]
 
@@ -86,7 +108,11 @@ class UserManagementHandler:
         current_page = page + 1
 
         title = f"لیست کاربران ({filter_type})" if locale == "fa" else f"Users List ({filter_type})"
-        page_indicator = f"صفحه {current_page} از {total_pages}" if locale == "fa" else f"Page {current_page} of {total_pages}"
+        page_indicator = (
+            f"صفحه {current_page} از {total_pages}"
+            if locale == "fa"
+            else f"Page {current_page} of {total_pages}"
+        )
 
         lines = [
             f"👥 {bold(title)} — {page_indicator}",
@@ -107,16 +133,27 @@ class UserManagementHandler:
         nav_row: list[dict[str, Any]] = []
         if page > 0:
             prev_cb = UserCallback(action="list", extra=f"{filter_type}:{page - 1}")
-            nav_row.append({"text": "⬅️ قبلی" if locale == "fa" else "⬅️ Prev", "callback_data": prev_cb.pack()})
+            nav_row.append(
+                {"text": "⬅️ قبلی" if locale == "fa" else "⬅️ Prev", "callback_data": prev_cb.pack()}
+            )
         if current_page < total_pages:
             next_cb = UserCallback(action="list", extra=f"{filter_type}:{page + 1}")
-            nav_row.append({"text": "بعدی ➡️" if locale == "fa" else "Next ➡️", "callback_data": next_cb.pack()})
+            nav_row.append(
+                {"text": "بعدی ➡️" if locale == "fa" else "Next ➡️", "callback_data": next_cb.pack()}
+            )
 
         if nav_row:
             keyboard.append(nav_row)
 
         back_cb = UserCallback(action="ovw", target_id=0)
-        keyboard.append([{"text": "🔙 بازگشت به آمار" if locale == "fa" else "🔙 Back to Overview", "callback_data": back_cb.pack()}])
+        keyboard.append(
+            [
+                {
+                    "text": "🔙 بازگشت به آمار" if locale == "fa" else "🔙 Back to Overview",
+                    "callback_data": back_cb.pack(),
+                }
+            ]
+        )
 
         return "\n".join(lines), keyboard
 
@@ -132,9 +169,18 @@ class UserManagementHandler:
         if user is None:
             text = "کاربر یافت نشد." if locale == "fa" else "User not found."
             back_cb = UserCallback(action="ovw", target_id=0)
-            return text, [[{"text": "🔙 بازگشت" if locale == "fa" else "🔙 Back", "callback_data": back_cb.pack()}]]
+            return text, [
+                [
+                    {
+                        "text": "🔙 بازگشت" if locale == "fa" else "🔙 Back",
+                        "callback_data": back_cb.pack(),
+                    }
+                ]
+            ]
 
-        first_str = format_jalali_datetime(user.first_seen) if locale == "fa" else str(user.first_seen)
+        first_str = (
+            format_jalali_datetime(user.first_seen) if locale == "fa" else str(user.first_seen)
+        )
         last_str = format_jalali_datetime(user.last_seen) if locale == "fa" else str(user.last_seen)
 
         status_text = "⛔ مسدود" if user.status == "blocked" else "✅ فعال"
@@ -161,23 +207,60 @@ class UserManagementHandler:
         # Block/Unblock button
         if user.status == "blocked":
             unblock_cb = UserCallback(action="unblock", target_id=user.telegram_id)
-            keyboard.append([{"text": "🔓 رفع مسدودیت" if locale == "fa" else "🔓 Unblock", "callback_data": unblock_cb.pack()}])
+            keyboard.append(
+                [
+                    {
+                        "text": "🔓 رفع مسدودیت" if locale == "fa" else "🔓 Unblock",
+                        "callback_data": unblock_cb.pack(),
+                    }
+                ]
+            )
         else:
             block_cb = UserCallback(action="block", target_id=user.telegram_id)
-            keyboard.append([{"text": "⛔ مسدود کردن کاربر" if locale == "fa" else "⛔ Block User", "callback_data": block_cb.pack()}])
+            keyboard.append(
+                [
+                    {
+                        "text": "⛔ مسدود کردن کاربر" if locale == "fa" else "⛔ Block User",
+                        "callback_data": block_cb.pack(),
+                    }
+                ]
+            )
 
         # Delete user record button
         del_cb = UserCallback(action="del", target_id=user.telegram_id)
-        keyboard.append([{"text": "🗑️ حذف رکورد کاربر" if locale == "fa" else "🗑️ Delete Record", "callback_data": del_cb.pack()}])
+        keyboard.append(
+            [
+                {
+                    "text": "🗑️ حذف رکورد کاربر" if locale == "fa" else "🗑️ Delete Record",
+                    "callback_data": del_cb.pack(),
+                }
+            ]
+        )
 
         # Superadmin promote button (R50: promote to admin hands over to R48 flow)
         if viewer_is_superadmin:
             promote_cb = UserCallback(action="promote", target_id=user.telegram_id)
-            keyboard.append([{"text": "👑 ارتقا به مدیر (R48)" if locale == "fa" else "👑 Promote to Admin", "callback_data": promote_cb.pack()}])
+            keyboard.append(
+                [
+                    {
+                        "text": "👑 ارتقا به مدیر (R48)"
+                        if locale == "fa"
+                        else "👑 Promote to Admin",
+                        "callback_data": promote_cb.pack(),
+                    }
+                ]
+            )
 
         # Back button
         back_cb = UserCallback(action="list", extra="all:0")
-        keyboard.append([{"text": "🔙 بازگشت به لیست" if locale == "fa" else "🔙 Back to List", "callback_data": back_cb.pack()}])
+        keyboard.append(
+            [
+                {
+                    "text": "🔙 بازگشت به لیست" if locale == "fa" else "🔙 Back to List",
+                    "callback_data": back_cb.pack(),
+                }
+            ]
+        )
 
         return "\n".join(lines), keyboard
 
@@ -201,7 +284,10 @@ class UserManagementHandler:
                 await block_user(session, target_tg_id, reason=reason, admin_id=actor_id)
                 return True, "کاربر با موفقیت مسدود شد."
         except CannotBlockAdminError:
-            return False, "امکان مسدودسازی مدیر فعال وجود ندارد! ابتدا او را از بخش ادمین‌ها عزل کنید."
+            return (
+                False,
+                "امکان مسدودسازی مدیر فعال وجود ندارد! ابتدا او را از بخش ادمین‌ها عزل کنید.",
+            )
         except Exception as e:
             return False, f"خطا در تغییر وضعیت کاربر: {e}"
 

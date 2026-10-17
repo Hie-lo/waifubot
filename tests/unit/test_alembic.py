@@ -5,9 +5,10 @@ import shutil
 import tempfile
 import unittest
 
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
+
+from alembic import command
 
 
 class TestAlembicMigrations(unittest.TestCase):

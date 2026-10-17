@@ -30,24 +30,23 @@ class TestAuditService(unittest.IsolatedAsyncioTestCase):
 
     async def test_record_and_retrieve_audit_logs(self) -> None:
         """Audit entries are persisted and queryable in reverse chronological order."""
-        async with self.session_factory() as session:
-            async with session.begin():
-                await record_audit(
-                    session=session,
-                    admin_id=1001,
-                    action="setting_change",
-                    target="worker_count",
-                    old_val=2,
-                    new_val=4,
-                )
-                await record_audit(
-                    session=session,
-                    admin_id=1001,
-                    action="admin_add",
-                    target="admin:2002",
-                    old_val=None,
-                    new_val={"role": "admin"},
-                )
+        async with self.session_factory() as session, session.begin():
+            await record_audit(
+                session=session,
+                admin_id=1001,
+                action="setting_change",
+                target="worker_count",
+                old_val=2,
+                new_val=4,
+            )
+            await record_audit(
+                session=session,
+                admin_id=1001,
+                action="admin_add",
+                target="admin:2002",
+                old_val=None,
+                new_val={"role": "admin"},
+            )
 
         async with self.session_factory() as session:
             logs = await get_audit_logs(session, limit=10)
@@ -63,11 +62,10 @@ class TestAuditService(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_audit_logs_for_target(self) -> None:
         """Target-specific filter retrieves only matching audit logs."""
-        async with self.session_factory() as session:
-            async with session.begin():
-                await record_audit(session, 1001, "setting_change", "worker_count", 2, 4)
-                await record_audit(session, 1001, "setting_change", "max_concurrent_jobs", 2, 4)
-                await record_audit(session, 1001, "setting_change", "worker_count", 4, 6)
+        async with self.session_factory() as session, session.begin():
+            await record_audit(session, 1001, "setting_change", "worker_count", 2, 4)
+            await record_audit(session, 1001, "setting_change", "max_concurrent_jobs", 2, 4)
+            await record_audit(session, 1001, "setting_change", "worker_count", 4, 6)
 
         async with self.session_factory() as session:
             target_logs = await get_audit_logs_for_target(session, target="worker_count")
@@ -77,13 +75,17 @@ class TestAuditService(unittest.IsolatedAsyncioTestCase):
 
     def test_format_audit_entry(self) -> None:
         """Verifies text formatting for bot views in Persian and English."""
-        record = type("MockAudit", (), {
-            "admin_id": 999,
-            "action": "setting_change",
-            "target": "challenge_wait_seconds",
-            "old_val": "180",
-            "new_val": "300",
-        })()
+        record = type(
+            "MockAudit",
+            (),
+            {
+                "admin_id": 999,
+                "action": "setting_change",
+                "target": "challenge_wait_seconds",
+                "old_val": "180",
+                "new_val": "300",
+            },
+        )()
 
         fa_str = format_audit_entry(record, locale="fa")
         self.assertIn("setting_change", fa_str)

@@ -1,15 +1,13 @@
 """Image pipeline: content-addressed storage, pHash duplicate detection, and provenance tracking (R43, R47)."""
 
-from dataclasses import dataclass
 import hashlib
 import io
 import time
-from typing import Any
+from dataclasses import dataclass
 
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from waifubot.core.models import ImageAsset
 from waifubot.core.ports import ImageStore
 from waifubot.db.models import ImageRecord
 

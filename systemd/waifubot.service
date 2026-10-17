@@ -1,0 +1,22 @@
+[Unit]
+Description=WaifuBot v4.1 Telegram Anime Generator Service
+After=network.target
+
+[Service]
+Type=simple
+User=waifubot
+WorkingDirectory=/opt/waifubot
+ExecStart=/opt/waifubot/.venv/bin/python -m waifubot.bot.app
+Restart=always
+RestartForceExitStatus=75
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=60
+EnvironmentFile=/opt/waifubot/.env
+
+# Security Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -68,9 +68,7 @@ async def create_new_version(
 ) -> CharacterRecord:
     """Creates a new version of an existing character, retiring the current version (R18)."""
     # Fetch parent version
-    res = await session.execute(
-        select(CharacterRecord).where(CharacterRecord.id == parent_id)
-    )
+    res = await session.execute(select(CharacterRecord).where(CharacterRecord.id == parent_id))
     parent = res.scalar_one_or_none()
     if parent is None:
         raise ValueError(f"Parent character record {parent_id} not found")

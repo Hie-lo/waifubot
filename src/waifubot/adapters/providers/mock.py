@@ -81,12 +81,7 @@ class MockGenerationProvider:
             raise self.fail_with_error
 
         count = (
-            self.fixed_images_per_call
-            if self.fixed_images_per_call is not None
-            else needed_count
+            self.fixed_images_per_call if self.fixed_images_per_call is not None else needed_count
         )
         # Produce distinct bytes per image index to ensure unique content hashes
-        return [
-            TINY_PNG_BYTES + f"//img_{i}".encode("utf-8")
-            for i in range(count)
-        ]
+        return [TINY_PNG_BYTES + f"//img_{i}".encode() for i in range(count)]

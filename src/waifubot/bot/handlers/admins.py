@@ -9,11 +9,11 @@ Contract:
 """
 
 from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from waifubot.bot.callbacks import AdminCallback, NavCallback
-from waifubot.bot.telegram_html import bold, code, escape_html
-from waifubot.core.i18n import t
+from waifubot.bot.telegram_html import bold, code
 from waifubot.services.admins import (
     LastSuperadminError,
     create_invite,
@@ -51,17 +51,31 @@ class AdminManagementHandler:
             badge = "👑 سوپرادمین" if adm.role == "superadmin" else "🛡️ ادمین"
             if locale != "fa":
                 badge = "👑 Superadmin" if adm.role == "superadmin" else "🛡️ Admin"
-            
+
             lines.append(f"• {badge} | ID: {code(str(adm.telegram_id))}")
             cb = AdminCallback(action="card", target_id=adm.telegram_id)
             keyboard.append([{"text": f"{badge} - {adm.telegram_id}", "callback_data": cb.pack()}])
 
         # Action buttons
         invite_cb = AdminCallback(action="invite_menu", target_id=0)
-        keyboard.append([{"text": "➕ ساخت لینک دعوت" if locale == "fa" else "➕ Generate Invite Link", "callback_data": invite_cb.pack()}])
+        keyboard.append(
+            [
+                {
+                    "text": "➕ ساخت لینک دعوت" if locale == "fa" else "➕ Generate Invite Link",
+                    "callback_data": invite_cb.pack(),
+                }
+            ]
+        )
 
         back_cb = NavCallback(action="back", target="settings")
-        keyboard.append([{"text": "🔙 بازگشت" if locale == "fa" else "🔙 Back", "callback_data": back_cb.pack()}])
+        keyboard.append(
+            [
+                {
+                    "text": "🔙 بازگشت" if locale == "fa" else "🔙 Back",
+                    "callback_data": back_cb.pack(),
+                }
+            ]
+        )
 
         return "\n".join(lines), keyboard
 
@@ -74,11 +88,24 @@ class AdminManagementHandler:
         """Renders details and management actions for a specific administrator."""
         admin = await get_admin(session, target_tg_id)
         if admin is None:
-            text = "ادمین یافت نشد یا حذف شده است." if locale == "fa" else "Admin not found or removed."
+            text = (
+                "ادمین یافت نشد یا حذف شده است."
+                if locale == "fa"
+                else "Admin not found or removed."
+            )
             back_cb = AdminCallback(action="list", target_id=0)
-            return text, [[{"text": "🔙 بازگشت" if locale == "fa" else "🔙 Back", "callback_data": back_cb.pack()}]]
+            return text, [
+                [
+                    {
+                        "text": "🔙 بازگشت" if locale == "fa" else "🔙 Back",
+                        "callback_data": back_cb.pack(),
+                    }
+                ]
+            ]
 
-        created_str = format_jalali_datetime(admin.created_at) if locale == "fa" else str(admin.created_at)
+        created_str = (
+            format_jalali_datetime(admin.created_at) if locale == "fa" else str(admin.created_at)
+        )
         role_title = "سوپرادمین (دسترسی نامحدود)" if admin.role == "superadmin" else "ادمین"
         if locale != "fa":
             role_title = "Superadmin (unlimited access)" if admin.role == "superadmin" else "Admin"
@@ -95,19 +122,51 @@ class AdminManagementHandler:
 
         # Role toggle button (promote/demote)
         if admin.role == "admin":
-            promote_cb = AdminCallback(action="role", target_id=admin.telegram_id, extra="superadmin")
-            keyboard.append([{"text": "👑 ارتقا به سوپرادمین" if locale == "fa" else "👑 Promote to Superadmin", "callback_data": promote_cb.pack()}])
+            promote_cb = AdminCallback(
+                action="role", target_id=admin.telegram_id, extra="superadmin"
+            )
+            keyboard.append(
+                [
+                    {
+                        "text": "👑 ارتقا به سوپرادمین"
+                        if locale == "fa"
+                        else "👑 Promote to Superadmin",
+                        "callback_data": promote_cb.pack(),
+                    }
+                ]
+            )
         else:
             demote_cb = AdminCallback(action="role", target_id=admin.telegram_id, extra="admin")
-            keyboard.append([{"text": "🛡️ تنزل به ادمین عادی" if locale == "fa" else "🛡️ Demote to Admin", "callback_data": demote_cb.pack()}])
+            keyboard.append(
+                [
+                    {
+                        "text": "🛡️ تنزل به ادمین عادی" if locale == "fa" else "🛡️ Demote to Admin",
+                        "callback_data": demote_cb.pack(),
+                    }
+                ]
+            )
 
         # Remove button
         remove_cb = AdminCallback(action="remove", target_id=admin.telegram_id)
-        keyboard.append([{"text": "❌ حذف ادمین" if locale == "fa" else "❌ Remove Admin", "callback_data": remove_cb.pack()}])
+        keyboard.append(
+            [
+                {
+                    "text": "❌ حذف ادمین" if locale == "fa" else "❌ Remove Admin",
+                    "callback_data": remove_cb.pack(),
+                }
+            ]
+        )
 
         # Back button
         back_cb = AdminCallback(action="list", target_id=0)
-        keyboard.append([{"text": "🔙 بازگشت به لیست" if locale == "fa" else "🔙 Back to List", "callback_data": back_cb.pack()}])
+        keyboard.append(
+            [
+                {
+                    "text": "🔙 بازگشت به لیست" if locale == "fa" else "🔙 Back to List",
+                    "callback_data": back_cb.pack(),
+                }
+            ]
+        )
 
         return "\n".join(lines), keyboard
 

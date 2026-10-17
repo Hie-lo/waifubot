@@ -2,7 +2,8 @@
 
 import asyncio
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,6 +77,5 @@ class GracefulShutdownCoordinator:
                 await asyncio.sleep(0.5)
 
         # Release any uncompleted leases back to pending without consuming attempts
-        async with self.session_factory() as session:
-            async with session.begin():
-                return await release_running_leases(session)
+        async with self.session_factory() as session, session.begin():
+            return await release_running_leases(session)

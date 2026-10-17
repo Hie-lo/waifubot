@@ -7,8 +7,9 @@ Create Date: 2026-10-17 22:25:00
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "0005_job_lease"
 down_revision: str | None = None

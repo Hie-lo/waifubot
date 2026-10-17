@@ -2,11 +2,17 @@
 
 from pathlib import Path
 from typing import Any
+
 import yaml
 
-from waifubot.bot.callbacks import GenActionCallback, GenCountCallback, NavCallback, StudioCharCallback, StudioOptCallback
+from waifubot.bot.callbacks import (
+    GenActionCallback,
+    GenCountCallback,
+    NavCallback,
+    StudioCharCallback,
+)
 from waifubot.bot.panel import PanelEngine
-from waifubot.bot.telegram_html import bold, code, escape_html, italic
+from waifubot.bot.telegram_html import bold, code, italic
 from waifubot.bot.wizard import WizardState, WizardStore
 
 
@@ -136,15 +142,23 @@ class SpecialCharacterStudioHandler:
             # Pagination row
             nav_row: list[dict[str, str]] = []
             if char_page > 0:
-                nav_row.append({
-                    "text": "⬅️ قبلی",
-                    "callback_data": StudioCharCallback(char_index=-1, page=char_page - 1).pack(),
-                })
+                nav_row.append(
+                    {
+                        "text": "⬅️ قبلی",
+                        "callback_data": StudioCharCallback(
+                            char_index=-1, page=char_page - 1
+                        ).pack(),
+                    }
+                )
             if end_idx < len(chars):
-                nav_row.append({
-                    "text": "بعدی ➡️",
-                    "callback_data": StudioCharCallback(char_index=-1, page=char_page + 1).pack(),
-                })
+                nav_row.append(
+                    {
+                        "text": "بعدی ➡️",
+                        "callback_data": StudioCharCallback(
+                            char_index=-1, page=char_page + 1
+                        ).pack(),
+                    }
+                )
             if nav_row:
                 keyboard.append(nav_row)
         else:
@@ -152,27 +166,31 @@ class SpecialCharacterStudioHandler:
             row_cnt: list[dict[str, str]] = []
             for cnt in (2, 4, 8):
                 mark = "✅ " if state.target_count == cnt else ""
-                row_cnt.append({
-                    "text": f"{mark}{cnt} عکس",
-                    "callback_data": GenCountCallback(count=cnt).pack(),
-                })
+                row_cnt.append(
+                    {
+                        "text": f"{mark}{cnt} عکس",
+                        "callback_data": GenCountCallback(count=cnt).pack(),
+                    }
+                )
             keyboard.append(row_cnt)
 
             # Action buttons
-            keyboard.append([
-                {
-                    "text": "🚀 شروع ساخت تصاویر",
-                    "callback_data": GenActionCallback(action="submit").pack(),
-                },
-                {
-                    "text": "🔄 تغییر کاراکتر",
-                    "callback_data": GenActionCallback(action="change_char").pack(),
-                },
-            ])
+            keyboard.append(
+                [
+                    {
+                        "text": "🚀 شروع ساخت تصاویر",
+                        "callback_data": GenActionCallback(action="submit").pack(),
+                    },
+                    {
+                        "text": "🔄 تغییر کاراکتر",
+                        "callback_data": GenActionCallback(action="change_char").pack(),
+                    },
+                ]
+            )
 
         # Back and close row (R4)
-        keyboard.append([
-            {"text": "❌ بستن پنل", "callback_data": NavCallback(action="close").pack()}
-        ])
+        keyboard.append(
+            [{"text": "❌ بستن پنل", "callback_data": NavCallback(action="close").pack()}]
+        )
 
         return text, keyboard

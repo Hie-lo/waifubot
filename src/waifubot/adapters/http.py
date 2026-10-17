@@ -4,8 +4,6 @@ Modern browser headers matching desktop Chrome on Windows to ensure compatibilit
 with web endpoints. Referred to exclusively as standard browser headers.
 """
 
-from typing import Any
-
 STANDARD_BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

@@ -1,8 +1,9 @@
 """PanelEngine: per-admin locking, versioned panels, instant callback answers, and edit fallback (R2–R4, R40)."""
 
 import asyncio
-from dataclasses import dataclass
+import contextlib
 import time
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -71,10 +72,8 @@ class PanelEngine:
     ) -> None:
         """Answers callback query immediately to dismiss client loading spinner (R40)."""
         if query and hasattr(query, "answer"):
-            try:
+            with contextlib.suppress(Exception):
                 await query.answer(text=text, show_alert=show_alert)
-            except Exception:
-                pass
 
     async def is_valid_version(
         self,
@@ -152,11 +151,9 @@ class PanelEngine:
         async with lock:
             state = await self.memory.get(admin_id, chat_id)
             if state and self.gateway and hasattr(self.gateway, "delete_message"):
-                try:
+                with contextlib.suppress(Exception):
                     await self.gateway.delete_message(
                         chat_id=chat_id,
                         message_id=state.message_id,
                     )
-                except Exception:
-                    pass
             await self.memory.clear(admin_id, chat_id)

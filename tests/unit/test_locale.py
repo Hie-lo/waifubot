@@ -8,7 +8,7 @@ import unittest
 def parse_simple_yaml(filepath: str) -> dict[str, str]:
     """Parse flat key-value YAML without external dependencies."""
     data = {}
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):

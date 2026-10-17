@@ -5,7 +5,11 @@ import base64
 import re
 from typing import Any
 
-from waifubot.core.ports import ChallengeGate, ChallengeTimeoutError, GenerationProvider, ProviderSlot
+from waifubot.core.ports import (
+    ChallengeGate,
+    ChallengeTimeoutError,
+    ProviderSlot,
+)
 
 # Minimal 1x1 test PNG for mocked fallback execution
 TINY_PNG_BYTES = (
@@ -79,7 +83,7 @@ class PerchanceProvider:
         if self.mock_mode or page is None or not hasattr(page, "evaluate"):
             # Mock / stub execution for unit tests without live browser
             return [
-                TINY_PNG_BYTES + f"//perchance_{slot.slot_id}_{i}".encode("utf-8")
+                TINY_PNG_BYTES + f"//perchance_{slot.slot_id}_{i}".encode()
                 for i in range(needed_count)
             ]
 
@@ -106,7 +110,7 @@ class PerchanceProvider:
         # Fallback to needed count if fresh urls is empty in mock/synthetic tests
         if not results:
             results = [
-                TINY_PNG_BYTES + f"//perchance_{slot.slot_id}_{i}".encode("utf-8")
+                TINY_PNG_BYTES + f"//perchance_{slot.slot_id}_{i}".encode()
                 for i in range(needed_count)
             ]
 

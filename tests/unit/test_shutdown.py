@@ -29,28 +29,26 @@ class TestShutdownService(unittest.IsolatedAsyncioTestCase):
     async def test_release_leases_without_consuming_attempts(self) -> None:
         """Graceful shutdown resets running jobs to pending without incrementing attempts_done (R37)."""
         now = 1000.0
-        async with self.session_factory() as session:
-            async with session.begin():
-                session.add(
-                    JobRecord(
-                        job_id="job-interrupted-shutdown",
-                        requester_user_id=101,
-                        admin_id=505,
-                        prompt="anime scene",
-                        status="running",
-                        lease_owner="worker-sigterm",
-                        lease_expires_at=now + 55.0,
-                        attempts_done=1,  # previously had 1 attempt
-                        max_attempts=3,
-                        created_at=now - 20.0,
-                        updated_at=now,
-                    )
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="job-interrupted-shutdown",
+                    requester_user_id=101,
+                    admin_id=505,
+                    prompt="anime scene",
+                    status="running",
+                    lease_owner="worker-sigterm",
+                    lease_expires_at=now + 55.0,
+                    attempts_done=1,  # previously had 1 attempt
+                    max_attempts=3,
+                    created_at=now - 20.0,
+                    updated_at=now,
                 )
+            )
 
         # Release leases on shutdown
-        async with self.session_factory() as session:
-            async with session.begin():
-                released = await release_running_leases(session=session, now=now + 5.0)
+        async with self.session_factory() as session, session.begin():
+            released = await release_running_leases(session=session, now=now + 5.0)
 
         self.assertEqual(released, ["job-interrupted-shutdown"])
 
@@ -61,7 +59,9 @@ class TestShutdownService(unittest.IsolatedAsyncioTestCase):
             )
             job = res.scalar_one()
             self.assertEqual(job.status, "pending")
-            self.assertEqual(job.attempts_done, 1, "R37 invariant violated: attempts_done was consumed!")
+            self.assertEqual(
+                job.attempts_done, 1, "R37 invariant violated: attempts_done was consumed!"
+            )
             self.assertIsNone(job.lease_owner)
             self.assertIsNone(job.lease_expires_at)
 
@@ -76,23 +76,22 @@ class TestShutdownService(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(coordinator.is_stopping)
 
         now = 1000.0
-        async with self.session_factory() as session:
-            async with session.begin():
-                session.add(
-                    JobRecord(
-                        job_id="job-coord",
-                        requester_user_id=101,
-                        admin_id=505,
-                        prompt="anime scene",
-                        status="running",
-                        lease_owner="worker-1",
-                        lease_expires_at=now + 60.0,
-                        attempts_done=0,
-                        max_attempts=3,
-                        created_at=now,
-                        updated_at=now,
-                    )
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="job-coord",
+                    requester_user_id=101,
+                    admin_id=505,
+                    prompt="anime scene",
+                    status="running",
+                    lease_owner="worker-1",
+                    lease_expires_at=now + 60.0,
+                    attempts_done=0,
+                    max_attempts=3,
+                    created_at=now,
+                    updated_at=now,
                 )
+            )
 
         released = await coordinator.execute_shutdown(active_jobs_checker=lambda: False)
         self.assertEqual(released, ["job-coord"])

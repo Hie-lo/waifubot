@@ -1,10 +1,9 @@
 """Unit tests for PanelEngine, per-admin lock, panel versioning, and edit fallback (R2–R4, R40)."""
 
-import asyncio
 import unittest
 from typing import Any
 
-from waifubot.bot.panel import PanelEngine, PanelLockManager, PanelMemory, PanelState
+from waifubot.bot.panel import PanelEngine, PanelLockManager, PanelState
 
 
 class MockTelegramGateway:
@@ -19,11 +18,17 @@ class MockTelegramGateway:
 
     async def send_message(self, chat_id: int, text: str, reply_markup: Any = None) -> Any:
         self.message_counter += 1
-        msg = type("Msg", (), {"message_id": self.message_counter, "chat_id": chat_id, "text": text})()
-        self.sent_messages.append({"message_id": self.message_counter, "chat_id": chat_id, "text": text})
+        msg = type(
+            "Msg", (), {"message_id": self.message_counter, "chat_id": chat_id, "text": text}
+        )()
+        self.sent_messages.append(
+            {"message_id": self.message_counter, "chat_id": chat_id, "text": text}
+        )
         return msg
 
-    async def edit_message_text(self, chat_id: int, message_id: int, text: str, reply_markup: Any = None) -> Any:
+    async def edit_message_text(
+        self, chat_id: int, message_id: int, text: str, reply_markup: Any = None
+    ) -> Any:
         if self.fail_edit_with:
             raise self.fail_edit_with
         self.edited_messages.append({"chat_id": chat_id, "message_id": message_id, "text": text})
@@ -62,13 +67,19 @@ class TestPanelEngine(unittest.IsolatedAsyncioTestCase):
         )
 
         # Version 2 is stale (current is 3) -> rejected
-        self.assertFalse(await engine.is_valid_version(admin_id=101, chat_id=505, callback_version=2))
+        self.assertFalse(
+            await engine.is_valid_version(admin_id=101, chat_id=505, callback_version=2)
+        )
 
         # Version 3 is current -> accepted
-        self.assertTrue(await engine.is_valid_version(admin_id=101, chat_id=505, callback_version=3))
+        self.assertTrue(
+            await engine.is_valid_version(admin_id=101, chat_id=505, callback_version=3)
+        )
 
         # Version 4 is fresh -> accepted
-        self.assertTrue(await engine.is_valid_version(admin_id=101, chat_id=505, callback_version=4))
+        self.assertTrue(
+            await engine.is_valid_version(admin_id=101, chat_id=505, callback_version=4)
+        )
 
     async def test_render_panel_edits_in_place(self) -> None:
         """Existing panel edits in place and increments version (R3, R40)."""

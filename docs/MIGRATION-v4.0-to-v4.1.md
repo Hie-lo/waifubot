@@ -86,11 +86,11 @@ Real test: `python -m pytest tests/unit/test_scheduler.py tests/unit/test_audit.
 
 ## Stage 8 — Observability & operations
 
-- [ ] Structured JSON logs with `job_id`/`admin_id`/`provider`/`slot` context (R46)
-- [ ] `/status` (with uptime and last restart) and `waifubot health`
-- [ ] `services/system.py` + `handlers/system.py` + Settings → System (R49): restart workers, restart bot (exit code 75, `restart.pending` marker, panel edited after startup, `os.execv` fallback)
-- [ ] Hypothesis tests for the exact-count gate; recorded fixtures for Perchance
-- [ ] systemd unit with `RestartForceExitStatus=75` + WSL2 idle check **[VERIFY]**; test a real restart from the panel
+- [x] Structured JSON logs with `job_id`/`admin_id`/`provider`/`slot` context (R46)
+- [x] `/status` (with uptime and last restart) and `waifubot health`
+- [x] `services/system.py` + `handlers/system.py` + Settings → System (R49): restart workers, restart bot (exit code 75, `restart.pending` marker, panel edited after startup, `os.execv` fallback)
+- [x] Hypothesis tests for the exact-count gate; recorded fixtures for Perchance
+- [x] systemd unit with `RestartForceExitStatus=75` + WSL2 idle check **[VERIFY]**; test a real restart from the panel
 
 Real test: `python -m pytest tests/ tests/unit/test_restart_controller.py -q && python -m ruff check src/ tests/ alembic/ && python -m pyright && lint-imports`
 

@@ -1,8 +1,6 @@
 """Integration tests for Special Character Studio wizard and bot flow (R16B, R40, R42)."""
 
-import asyncio
 import unittest
-from unittest.mock import AsyncMock
 
 from waifubot.bot.handlers.generate import SpecialCharacterStudioHandler
 from waifubot.bot.panel import PanelEngine

@@ -1,6 +1,7 @@
 """Unit tests for content safety and soft-fail enhance (R26, R39)."""
 
 import unittest
+
 from waifubot.core.safety import check_safety, recheck_enhancer_output
 
 

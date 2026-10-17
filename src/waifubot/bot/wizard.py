@@ -1,7 +1,6 @@
 """Wizard state: versioned Pydantic models with TTL expiration and prompt composition (R15, R16B)."""
 
 import time
-from typing import Any
 
 from pydantic import BaseModel, Field
 

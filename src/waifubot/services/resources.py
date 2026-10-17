@@ -1,13 +1,11 @@
 """Resource management: soft MemoryGuard and serialized ChallengeGate (R28, R35)."""
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 import ctypes
 import os
 import platform
-import sys
-from typing import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 
 
 class ChallengeTimeoutError(Exception):
@@ -19,6 +17,7 @@ def get_system_free_ram_mb() -> float:
     system = platform.system()
     if system == "Windows":
         try:
+
             class MEMORYSTATUSEX(ctypes.Structure):
                 _fields_ = [
                     ("dwLength", ctypes.c_ulong),
@@ -40,7 +39,7 @@ def get_system_free_ram_mb() -> float:
             return 2048.0  # Safe fallback if ctypes query fails
     elif system == "Linux" and os.path.exists("/proc/meminfo"):
         try:
-            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            with open("/proc/meminfo", encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("MemAvailable:"):
                         parts = line.split()
@@ -95,7 +94,7 @@ class ChallengeGate:
         """Acquires exclusive access to the challenge window or raises ChallengeTimeoutError."""
         try:
             await asyncio.wait_for(self._lock.acquire(), timeout=wait_timeout_seconds)
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             raise ChallengeTimeoutError(
                 f"Timed out waiting {wait_timeout_seconds}s for challenge window"
             ) from err

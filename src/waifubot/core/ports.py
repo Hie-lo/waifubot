@@ -93,9 +93,7 @@ class ChannelProbe(Protocol):
 
     async def get_chat_info(self, chat_ref: str | int) -> dict[str, Any]: ...
 
-    async def get_chat_member_role(
-        self, chat_ref: str | int, user_id: int
-    ) -> str | None: ...
+    async def get_chat_member_role(self, chat_ref: str | int, user_id: int) -> str | None: ...
 
     async def get_bot_rights(self, chat_ref: str | int) -> dict[str, bool]: ...
 
@@ -107,7 +105,4 @@ class ChallengeTimeoutError(Exception):
 class ChallengeGate(Protocol):
     """Port for serializing human challenge interactions (R28)."""
 
-    def acquire_challenge(
-        self, wait_timeout_seconds: float = 180.0
-    ) -> AsyncIterator[None]: ...
-
+    def acquire_challenge(self, wait_timeout_seconds: float = 180.0) -> AsyncIterator[None]: ...

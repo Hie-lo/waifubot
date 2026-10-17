@@ -7,8 +7,9 @@ Create Date: 2026-10-18 00:07:00
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "0006_image_provenance"
 down_revision: str | None = "0005_job_lease"
@@ -41,7 +42,9 @@ def upgrade() -> None:
     op.create_index("ix_images_image_id", "images", ["image_id"], unique=True)
     op.create_index("ix_images_phash", "images", ["phash"], unique=False)
     op.create_index("ix_images_job_id", "images", ["job_id"], unique=False)
-    op.create_index("ix_images_character_version_id", "images", ["character_version_id"], unique=False)
+    op.create_index(
+        "ix_images_character_version_id", "images", ["character_version_id"], unique=False
+    )
     op.create_index("ix_images_created_at", "images", ["created_at"], unique=False)
 
 

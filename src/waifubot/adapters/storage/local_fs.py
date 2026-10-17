@@ -35,6 +35,7 @@ class LocalFsImageStore:
         clean_data = data
         try:
             from io import BytesIO
+
             from PIL import Image
 
             img = Image.open(BytesIO(data))

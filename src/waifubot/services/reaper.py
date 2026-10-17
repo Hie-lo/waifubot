@@ -1,9 +1,11 @@
 """Reaper service: cleans up expired leases and announces interruptions (R13, R36)."""
 
 import asyncio
-from dataclasses import dataclass
+import contextlib
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,29 +104,26 @@ class ReaperLoop:
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
 
     async def _run_loop(self) -> None:
         while self._running:
             try:
                 await asyncio.sleep(self.check_interval)
-                async with self.session_factory() as session:
-                    async with session.begin():
-                        notices = await reap_expired_jobs(
-                            session=session,
-                            retry_backoff_seconds=self.retry_backoff,
-                        )
-                        if self.on_interrupted_notice:
-                            for notice in notices:
-                                try:
-                                    res = self.on_interrupted_notice(notice)
-                                    if asyncio.iscoroutine(res):
-                                        await res
-                                except Exception:
-                                    pass
+                async with self.session_factory() as session, session.begin():
+                    notices = await reap_expired_jobs(
+                        session=session,
+                        retry_backoff_seconds=self.retry_backoff,
+                    )
+                    if self.on_interrupted_notice:
+                        for notice in notices:
+                            try:
+                                res = self.on_interrupted_notice(notice)
+                                if asyncio.iscoroutine(res):
+                                    await res
+                            except Exception:
+                                pass
             except asyncio.CancelledError:
                 break
             except Exception:

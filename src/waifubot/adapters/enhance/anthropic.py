@@ -46,9 +46,7 @@ class AnthropicEnhancer:
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_content}],
             )
-            text_blocks = [
-                b.text for b in response.content if getattr(b, "type", "") == "text"
-            ]
+            text_blocks = [b.text for b in response.content if getattr(b, "type", "") == "text"]
             return "".join(text_blocks).strip()
 
         return await asyncio.wait_for(_call(), timeout=timeout_seconds)

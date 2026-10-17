@@ -311,3 +311,27 @@ class ScheduleCallback(CallbackData):
         sch_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
         extra = parts[2] if len(parts) > 2 else ""
         return cls(action=action, schedule_id=sch_id, extra=extra)
+
+
+@registry.register
+class SystemCallback(CallbackData):
+    """System control callback (restart workers, restart bot, confirm) (R49)."""
+
+    prefix = "sys"
+
+    def __init__(self, action: str, extra: str = "") -> None:
+        self.action = action
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "SystemCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        extra = parts[1] if len(parts) > 1 else ""
+        return cls(action=action, extra=extra)

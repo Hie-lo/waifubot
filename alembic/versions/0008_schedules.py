@@ -7,8 +7,9 @@ Create Date: 2026-10-18 00:20:00
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "0008_schedules"
 down_revision: str | None = "0007_character_versions"
@@ -28,7 +29,9 @@ def upgrade() -> None:
         sa.Column("max_gap_minutes", sa.Integer(), server_default="180", nullable=False),
         sa.Column("next_at", sa.Float(), nullable=False),
         sa.Column("is_running", sa.Boolean(), server_default="1", nullable=False),
-        sa.Column("missed_run_policy", sa.String(length=32), server_default="catch_up_one", nullable=False),
+        sa.Column(
+            "missed_run_policy", sa.String(length=32), server_default="catch_up_one", nullable=False
+        ),
         sa.Column("created_at", sa.Float(), nullable=False),
         sa.Column("updated_at", sa.Float(), nullable=False),
         sa.PrimaryKeyConstraint("id", name="pk_schedules"),

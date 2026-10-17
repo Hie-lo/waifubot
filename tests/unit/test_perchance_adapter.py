@@ -1,6 +1,5 @@
 """Unit tests for PerchanceProvider adapter (R10, R28 contracts)."""
 
-import asyncio
 import unittest
 from typing import Any
 
@@ -47,7 +46,7 @@ class TestPerchanceAdapter(unittest.IsolatedAsyncioTestCase):
             generated_images=["https://perchance.org/img3.png", "https://perchance.org/img4.png"],
         )
         slot = MockSlot("slot-perchance")
-        setattr(slot, "page", page)
+        slot.page = page
 
         images = await provider.generate(
             prompt="anime hero",
@@ -74,7 +73,7 @@ class TestPerchanceAdapter(unittest.IsolatedAsyncioTestCase):
         page.has_challenge = True
 
         slot = MockSlot("slot-challenge")
-        setattr(slot, "page", page)
+        slot.page = page
 
         # Generating should detect challenge and pass through gate
         images = await provider.generate(
@@ -84,6 +83,22 @@ class TestPerchanceAdapter(unittest.IsolatedAsyncioTestCase):
             slot=slot,
         )
         self.assertEqual(len(images), 1)
+
+    def test_recorded_fixtures_parsing(self) -> None:
+        """Verifies recorded HTML and JSON fixtures for offline test determinism (R46)."""
+        import json
+        from pathlib import Path
+
+        fixtures_dir = Path("tests/fixtures/perchance")
+        gen_html = (fixtures_dir / "generator_page.html").read_text(encoding="utf-8")
+        ch_html = (fixtures_dir / "challenge_page.html").read_text(encoding="utf-8")
+        out_json = json.loads((fixtures_dir / "output_gallery.json").read_text(encoding="utf-8"))
+
+        self.assertIn("output-img", gen_html)
+        self.assertIn("challengeModal", ch_html)
+        self.assertIn("solveOnceBtn", ch_html)
+        self.assertEqual(len(out_json["images"]), 2)
+        self.assertEqual(out_json["seed"], 421890)
 
 
 if __name__ == "__main__":

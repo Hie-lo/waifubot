@@ -57,34 +57,33 @@ class TestWorkerPool(unittest.IsolatedAsyncioTestCase):
     async def test_worker_pool_executes_pending_jobs(self) -> None:
         """WorkerPool concurrently claims and satisfies pending jobs to completion (R9, R34)."""
         now = time.time()
-        async with self.session_factory() as session:
-            async with session.begin():
-                session.add(
-                    JobRecord(
-                        job_id="pool-job-1",
-                        requester_user_id=101,
-                        admin_id=101,
-                        prompt="girl 1",
-                        target_count=2,
-                        needed=2,
-                        status="pending",
-                        created_at=now,
-                        updated_at=now,
-                    )
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="pool-job-1",
+                    requester_user_id=101,
+                    admin_id=101,
+                    prompt="girl 1",
+                    target_count=2,
+                    needed=2,
+                    status="pending",
+                    created_at=now,
+                    updated_at=now,
                 )
-                session.add(
-                    JobRecord(
-                        job_id="pool-job-2",
-                        requester_user_id=102,
-                        admin_id=102,
-                        prompt="girl 2",
-                        target_count=2,
-                        needed=2,
-                        status="pending",
-                        created_at=now + 1.0,
-                        updated_at=now + 1.0,
-                    )
+            )
+            session.add(
+                JobRecord(
+                    job_id="pool-job-2",
+                    requester_user_id=102,
+                    admin_id=102,
+                    prompt="girl 2",
+                    target_count=2,
+                    needed=2,
+                    status="pending",
+                    created_at=now + 1.0,
+                    updated_at=now + 1.0,
                 )
+            )
 
         pool = WorkerPool(
             session_factory=self.session_factory,

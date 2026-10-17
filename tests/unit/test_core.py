@@ -1,13 +1,14 @@
 """Unit tests for pure core domain logic (limits, chat memory, token heuristics)."""
 
 import unittest
+
 from waifubot.core.chat_memory import (
     ChatMemory,
     estimate_tokens,
     normalize_text,
     parse_compaction_response,
 )
-from waifubot.core.limits import Limits, effective_limits
+from waifubot.core.limits import effective_limits
 
 
 class TestCoreDomain(unittest.TestCase):

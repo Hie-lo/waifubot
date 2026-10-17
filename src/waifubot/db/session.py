@@ -1,10 +1,10 @@
 """Async database session management with SQLite WAL pragmas and busy-retry backoff (ADR-0005)."""
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 import random
 import sqlite3
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import event, text
@@ -63,9 +63,8 @@ async def session_scope(
     attempt = 0
     while True:
         try:
-            async with session_factory() as session:
-                async with session.begin():
-                    yield session
+            async with session_factory() as session, session.begin():
+                yield session
             break
         except (OperationalError, sqlite3.OperationalError) as exc:
             error_msg = str(exc).lower()

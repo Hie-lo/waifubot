@@ -5,7 +5,6 @@ This is the only module in bot/ permitted to import from waifubot.adapters.
 """
 
 from dataclasses import dataclass
-from typing import Any
 
 from waifubot.adapters.clock import SystemClock
 from waifubot.adapters.providers.mock import MockGenerationProvider, MockSlotPool

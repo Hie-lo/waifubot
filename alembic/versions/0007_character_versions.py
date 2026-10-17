@@ -7,8 +7,9 @@ Create Date: 2026-10-18 00:07:30
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "0007_character_versions"
 down_revision: str | None = "0006_image_provenance"

@@ -1,8 +1,8 @@
 """Unit tests enforcing architecture layering rules via AST inspection."""
 
 import ast
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 
 def get_all_imports(file_path: Path) -> list[str]:
@@ -14,9 +14,8 @@ def get_all_imports(file_path: Path) -> list[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imported_modules.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imported_modules.append(node.module)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.append(node.module)
 
     return imported_modules
 

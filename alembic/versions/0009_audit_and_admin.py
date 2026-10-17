@@ -7,8 +7,9 @@ Create Date: 2026-10-18 00:25:00
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "0009_audit_and_admin"
 down_revision: str | None = "0008_schedules"

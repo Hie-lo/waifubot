@@ -1,7 +1,6 @@
 """Unit tests for BrowserSlotPool, MemoryGuard, and ChallengeGate (R28, R35)."""
 
 import asyncio
-import os
 import shutil
 import tempfile
 import unittest

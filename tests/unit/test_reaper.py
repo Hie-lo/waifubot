@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from waifubot.db.models import JobRecord
 from waifubot.db.session import create_engine_and_sessionmaker, init_db
-from waifubot.services.reaper import InterruptedNotice, reap_expired_jobs
+from waifubot.services.reaper import reap_expired_jobs
 
 
 class TestReaperService(unittest.IsolatedAsyncioTestCase):
@@ -29,32 +29,30 @@ class TestReaperService(unittest.IsolatedAsyncioTestCase):
     async def test_reaper_requeues_and_generates_notice(self) -> None:
         """Expired lease is requeued to retry_wait with attempt increment and R13 notice."""
         now = 1000.0
-        async with self.session_factory() as session:
-            async with session.begin():
-                session.add(
-                    JobRecord(
-                        job_id="job-expired-1",
-                        requester_user_id=101,
-                        admin_id=505,
-                        prompt="anime scene",
-                        status="running",
-                        lease_owner="worker-crashed",
-                        lease_expires_at=now - 5.0,  # expired 5 seconds ago
-                        attempts_done=0,
-                        max_attempts=3,
-                        created_at=now - 100.0,
-                        updated_at=now - 60.0,
-                    )
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="job-expired-1",
+                    requester_user_id=101,
+                    admin_id=505,
+                    prompt="anime scene",
+                    status="running",
+                    lease_owner="worker-crashed",
+                    lease_expires_at=now - 5.0,  # expired 5 seconds ago
+                    attempts_done=0,
+                    max_attempts=3,
+                    created_at=now - 100.0,
+                    updated_at=now - 60.0,
                 )
+            )
 
         # Run reaper
-        async with self.session_factory() as session:
-            async with session.begin():
-                notices = await reap_expired_jobs(
-                    session=session,
-                    now=now,
-                    retry_backoff_seconds=45.0,
-                )
+        async with self.session_factory() as session, session.begin():
+            notices = await reap_expired_jobs(
+                session=session,
+                now=now,
+                retry_backoff_seconds=45.0,
+            )
 
         # Verify notice
         self.assertEqual(len(notices), 1)
@@ -81,27 +79,25 @@ class TestReaperService(unittest.IsolatedAsyncioTestCase):
     async def test_reaper_fails_job_when_attempts_exhausted(self) -> None:
         """When attempts_done reaches max_attempts, reaper marks job as failed with lease_expired error."""
         now = 1000.0
-        async with self.session_factory() as session:
-            async with session.begin():
-                session.add(
-                    JobRecord(
-                        job_id="job-exhausted",
-                        requester_user_id=102,
-                        admin_id=506,
-                        prompt="anime scene",
-                        status="running",
-                        lease_owner="worker-dead",
-                        lease_expires_at=now - 1.0,
-                        attempts_done=2,
-                        max_attempts=3,  # next attempt will reach 3
-                        created_at=now - 100.0,
-                        updated_at=now - 10.0,
-                    )
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="job-exhausted",
+                    requester_user_id=102,
+                    admin_id=506,
+                    prompt="anime scene",
+                    status="running",
+                    lease_owner="worker-dead",
+                    lease_expires_at=now - 1.0,
+                    attempts_done=2,
+                    max_attempts=3,  # next attempt will reach 3
+                    created_at=now - 100.0,
+                    updated_at=now - 10.0,
                 )
+            )
 
-        async with self.session_factory() as session:
-            async with session.begin():
-                notices = await reap_expired_jobs(session=session, now=now)
+        async with self.session_factory() as session, session.begin():
+            notices = await reap_expired_jobs(session=session, now=now)
 
         self.assertEqual(len(notices), 1)
         self.assertEqual(notices[0].status, "failed")
@@ -118,34 +114,30 @@ class TestReaperService(unittest.IsolatedAsyncioTestCase):
     async def test_active_unexpired_jobs_are_not_reaped(self) -> None:
         """Jobs with valid future leases are untouched by the reaper."""
         now = 1000.0
-        async with self.session_factory() as session:
-            async with session.begin():
-                session.add(
-                    JobRecord(
-                        job_id="job-active",
-                        requester_user_id=101,
-                        admin_id=505,
-                        prompt="active running job",
-                        status="running",
-                        lease_owner="worker-live",
-                        lease_expires_at=now + 50.0,  # 50s in future
-                        attempts_done=0,
-                        max_attempts=3,
-                        created_at=now - 10.0,
-                        updated_at=now,
-                    )
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="job-active",
+                    requester_user_id=101,
+                    admin_id=505,
+                    prompt="active running job",
+                    status="running",
+                    lease_owner="worker-live",
+                    lease_expires_at=now + 50.0,  # 50s in future
+                    attempts_done=0,
+                    max_attempts=3,
+                    created_at=now - 10.0,
+                    updated_at=now,
                 )
+            )
 
-        async with self.session_factory() as session:
-            async with session.begin():
-                notices = await reap_expired_jobs(session=session, now=now)
+        async with self.session_factory() as session, session.begin():
+            notices = await reap_expired_jobs(session=session, now=now)
 
         self.assertEqual(len(notices), 0)
 
         async with self.session_factory() as session:
-            res = await session.execute(
-                select(JobRecord).where(JobRecord.job_id == "job-active")
-            )
+            res = await session.execute(select(JobRecord).where(JobRecord.job_id == "job-active"))
             job = res.scalar_one()
             self.assertEqual(job.status, "running")
             self.assertEqual(job.attempts_done, 0)

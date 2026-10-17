@@ -1,6 +1,7 @@
 """Worker pool: manages concurrent workers with live resize, job semaphore, and slot acquisition (R34, R35, R38)."""
 
 import asyncio
+import contextlib
 import hashlib
 import time
 from typing import Any
@@ -62,9 +63,7 @@ class WorkerPool:
         target_count = int(self.settings.get("worker_count", 2))
 
         # Clean completed tasks
-        self._worker_tasks = {
-            wid: t for wid, t in self._worker_tasks.items() if not t.done()
-        }
+        self._worker_tasks = {wid: t for wid, t in self._worker_tasks.items() if not t.done()}
 
         # Spawn new workers if below target
         while len(self._worker_tasks) < target_count:
@@ -92,15 +91,14 @@ class WorkerPool:
                 fair_claim = bool(self.settings.get("fair_claim", True))
                 lease_ttl = float(self.settings.get("lease_ttl_seconds", 60.0))
 
-                async with self.session_factory() as session:
-                    async with session.begin():
-                        job_record, self._last_served_requester_id = await claim_next_job(
-                            session=session,
-                            worker_id=worker_id,
-                            lease_duration_seconds=lease_ttl,
-                            fair_claim=fair_claim,
-                            last_served_requester_id=self._last_served_requester_id,
-                        )
+                async with self.session_factory() as session, session.begin():
+                    job_record, self._last_served_requester_id = await claim_next_job(
+                        session=session,
+                        worker_id=worker_id,
+                        lease_duration_seconds=lease_ttl,
+                        fair_claim=fair_claim,
+                        last_served_requester_id=self._last_served_requester_id,
+                    )
 
                 if job_record is None:
                     # No eligible jobs -> sleep briefly and re-sync
@@ -109,10 +107,8 @@ class WorkerPool:
                     continue
 
                 # Process claimed job
-                try:
+                with contextlib.suppress(Exception):
                     await self._execute_claimed_job(worker_id, job_record.job_id)
-                except Exception:
-                    pass
                 self._sync_workers()
 
     async def _execute_claimed_job(self, worker_id: str, job_id: str) -> None:
@@ -132,9 +128,7 @@ class WorkerPool:
         try:
             # Read fresh job record
             async with self.session_factory() as session:
-                res = await session.execute(
-                    select(JobRecord).where(JobRecord.job_id == job_id)
-                )
+                res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
                 record = res.scalar_one()
                 prompt = record.prompt
                 neg_prompt = record.negative_prompt
@@ -160,46 +154,39 @@ class WorkerPool:
             ]
 
             # Gate evaluation in memory
-            async with self.session_factory() as session:
-                async with session.begin():
-                    res = await session.execute(
-                        select(JobRecord).where(JobRecord.job_id == job_id)
-                    )
-                    record = res.scalar_one()
+            async with self.session_factory() as session, session.begin():
+                res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
+                record = res.scalar_one()
 
-                    domain_job = GenerationJob(
-                        job_id=record.job_id,
-                        requester_user_id=record.requester_user_id,
-                        prompt=record.prompt,
-                        target_count=record.target_count,
-                        needed=record.needed,
-                        status=JobStatus(record.status),
-                        run_no=record.run_no,
-                        rounds_done=record.rounds_done,
-                        max_rounds=record.max_rounds,
-                        zero_progress_streak=record.zero_progress_streak,
-                        zero_progress_limit=record.zero_progress_limit,
-                        surplus_dropped=record.surplus_dropped,
-                    )
+                domain_job = GenerationJob(
+                    job_id=record.job_id,
+                    requester_user_id=record.requester_user_id,
+                    prompt=record.prompt,
+                    target_count=record.target_count,
+                    needed=record.needed,
+                    status=JobStatus(record.status),
+                    run_no=record.run_no,
+                    rounds_done=record.rounds_done,
+                    max_rounds=record.max_rounds,
+                    zero_progress_streak=record.zero_progress_streak,
+                    zero_progress_limit=record.zero_progress_limit,
+                    surplus_dropped=record.surplus_dropped,
+                )
 
-                    evaluated_job = self.generation_service.process_batch(
-                        domain_job, batch_assets
-                    )
+                evaluated_job = self.generation_service.process_batch(domain_job, batch_assets)
 
-                    # Commit gate results back to database row
-                    record.status = evaluated_job.status.value
-                    record.needed = evaluated_job.needed
-                    record.rounds_done = evaluated_job.rounds_done
-                    record.zero_progress_streak = evaluated_job.zero_progress_streak
-                    record.surplus_dropped = evaluated_job.surplus_dropped
-                    record.error_code = (
-                        evaluated_job.error_code.value
-                        if evaluated_job.error_code
-                        else None
-                    )
-                    record.lease_owner = None
-                    record.lease_expires_at = None
-                    record.updated_at = time.time()
+                # Commit gate results back to database row
+                record.status = evaluated_job.status.value
+                record.needed = evaluated_job.needed
+                record.rounds_done = evaluated_job.rounds_done
+                record.zero_progress_streak = evaluated_job.zero_progress_streak
+                record.surplus_dropped = evaluated_job.surplus_dropped
+                record.error_code = (
+                    evaluated_job.error_code.value if evaluated_job.error_code else None
+                )
+                record.lease_owner = None
+                record.lease_expires_at = None
+                record.updated_at = time.time()
         finally:
             await heartbeat.stop()
 

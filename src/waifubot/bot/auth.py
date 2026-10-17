@@ -7,6 +7,7 @@ Contract:
 - Superadmins have role='superadmin', admins have role='admin', everyone else is role='user'.
 """
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,7 +55,7 @@ async def resolve_request_context(
     default_locale: str = "fa",
 ) -> tuple[bool, RequestContext]:
     """Derives RequestContext and checks whether the user is authorized to interact.
-    
+
     Returns:
         (is_allowed: bool, context: RequestContext)
     """
@@ -72,7 +73,7 @@ async def resolve_request_context(
         is_blocked = False
     else:
         role = "user"
-        is_blocked = (user_record.status == "blocked")
+        is_blocked = user_record.status == "blocked"
 
     ctx = RequestContext(
         telegram_id=telegram_id,
@@ -108,10 +109,8 @@ async def check_access_and_notify(
             if bot is not None and hasattr(bot, "send_message"):
                 reason = " مسدود شده توسط ادمین"
                 msg_text = t("blocked_notice", locale=ctx.locale, reason=reason)
-                try:
+                with contextlib.suppress(Exception):
                     await bot.send_message(chat_id=telegram_id, text=msg_text)
-                except Exception:
-                    pass
 
         return False, ctx
 

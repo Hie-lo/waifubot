@@ -1,8 +1,8 @@
 """Telegram rate limiter with flood-wait handling and file_id cache (R42)."""
 
 import asyncio
-from collections.abc import Callable, Coroutine
 import time
+from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
 T = TypeVar("T")

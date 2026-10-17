@@ -5,6 +5,7 @@ Provides `t(key, locale="fa", **kwargs)` for localized text rendering with parit
 
 from pathlib import Path
 from typing import Any
+
 import yaml
 
 _TRANSLATIONS: dict[str, dict[str, str]] = {}
@@ -24,7 +25,7 @@ def _load_locales() -> None:
     for lang in ("fa", "en"):
         file_path = locales_dir / f"{lang}.yaml"
         if file_path.is_file():
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 loaded = yaml.safe_load(f) or {}
                 _TRANSLATIONS[lang] = {str(k): str(v) for k, v in loaded.items()}
         else:

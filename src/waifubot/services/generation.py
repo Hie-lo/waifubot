@@ -74,4 +74,3 @@ class GenerationService:
 
     def manual_retry(self, job: GenerationJob) -> GenerationJob:
         return manual_retry_job(job)
-
