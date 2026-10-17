@@ -84,6 +84,22 @@ class TestLayerContracts(unittest.TestCase):
                         f"Layer violation in {file.name}: imported {imp} which violates adapters isolation rule",
                     )
 
+    def test_db_isolation(self) -> None:
+        """db must not import bot or services."""
+        forbidden_prefixes = (
+            "waifubot.bot",
+            "waifubot.services",
+        )
+        db_files = (self.src_root / "db").glob("**/*.py")
+        for file in db_files:
+            imports = get_all_imports(file)
+            for imp in imports:
+                for forbidden in forbidden_prefixes:
+                    self.assertFalse(
+                        imp == forbidden or imp.startswith(f"{forbidden}."),
+                        f"Layer violation in {file.name}: imported {imp} which violates db isolation rule",
+                    )
+
     def test_bot_adapters_isolation_except_composition_root(self) -> None:
         """bot modules (except bot/app.py) must not import adapters directly."""
         bot_files = (self.src_root / "bot").glob("**/*.py")

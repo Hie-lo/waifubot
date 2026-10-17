@@ -30,11 +30,11 @@ Real test: `lint-imports && python -m pyright && python -m pytest tests/ -q`
 
 ## Stage 3 — Durable claiming (lease, heartbeat, reaper, shutdown)
 
-- [ ] Alembic `0005_job_lease`
-- [ ] SQLite pragmas (WAL, busy_timeout, synchronous, foreign_keys) in `db/session.py`
-- [ ] `services/claiming.py`: atomic claim in `BEGIN IMMEDIATE`; fair round-robin
-- [ ] Heartbeat task; `services/reaper.py`; runtime `interrupted_notice` (R13)
-- [ ] Graceful shutdown (R37): stop claiming → grace wait → release leases without consuming attempts
+- [x] Alembic `0005_job_lease`
+- [x] SQLite pragmas (WAL, busy_timeout, synchronous, foreign_keys) in `db/session.py`
+- [x] `services/claiming.py`: atomic claim in `BEGIN IMMEDIATE`; fair round-robin
+- [x] Heartbeat task; `services/reaper.py`; runtime `interrupted_notice` (R13)
+- [x] Graceful shutdown (R37): stop claiming → grace wait → release leases without consuming attempts
 
 Real test: `python -m pytest tests/unit/test_claiming.py tests/unit/test_reaper.py tests/unit/test_shutdown.py -q`
 

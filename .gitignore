@@ -21,6 +21,7 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+data/
 
 # Storage (runtime)
 storage/images/
