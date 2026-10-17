@@ -49,3 +49,52 @@ class JobRecord(Base):
     # Timestamps
     created_at: Mapped[float] = mapped_column(Float, default=time.time, index=True, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class ImageRecord(Base):
+    """Stored image asset with provenance metadata and perceptual hash (R43, R47)."""
+
+    __tablename__ = "images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    image_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    phash: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    mime_type: Mapped[str] = mapped_column(String(32), default="image/png", nullable=False)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Provenance columns (R43)
+    job_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    character_version_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    final_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    negative_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    seed: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider: Mapped[str] = mapped_column(String(64), default="perchance", nullable=False)
+    provider_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
+    is_enhanced: Mapped[bool] = mapped_column(default=False, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, index=True, nullable=False)
+
+
+class CharacterRecord(Base):
+    """Character appearance record with version history (R14, R18)."""
+
+    __tablename__ = "characters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    character_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    is_current: Mapped[bool] = mapped_column(default=True, index=True, nullable=False)
+    edit_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    appearance_facts: Mapped[str] = mapped_column(Text, nullable=False)
+    traits_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extras: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mode: Mapped[str] = mapped_column(String(32), default="known", nullable=False)
+
+    created_by: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+

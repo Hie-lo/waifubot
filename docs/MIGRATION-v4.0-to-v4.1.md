@@ -63,12 +63,12 @@ Real test: `python -m pytest tests/test_bot_flow.py tests/unit/test_callbacks_re
 
 ## Stage 6 — Data model: provenance, image store, character versions
 
-- [ ] Alembic `0006_image_provenance`, `0007_character_versions` (backfill from `edit_of`)
-- [ ] `adapters/storage/local_fs.py`: content-addressed, atomic, EXIF strip
-- [ ] pHash + `near_duplicate` reject reason; `phash_distance` setting
-- [ ] Record provenance (R43)
-- [ ] `identity.py`/UI: `character_id`, `version`, `is_current`
-- [ ] Vision Lab preset catalog integration: `config/vision_lab_presets.yaml` (114 characters + 11 option categories)
+- [x] Alembic `0006_image_provenance`, `0007_character_versions` (backfill from `edit_of`)
+- [x] `adapters/storage/local_fs.py`: content-addressed, atomic, EXIF strip
+- [x] pHash + `near_duplicate` reject reason; `phash_distance` setting
+- [x] Record provenance (R43)
+- [x] `identity.py`/UI: `character_id`, `version`, `is_current`
+- [x] Vision Lab preset catalog integration: `config/vision_lab_presets.yaml` (114 characters + 11 option categories)
 
 Real test: `python -m pytest tests/unit/test_image_pipeline.py tests/unit/test_identity.py tests/unit/test_alembic.py -q`
 

@@ -1,0 +1,61 @@
+"""Unit tests for Alembic database migrations."""
+
+import os
+import shutil
+import tempfile
+import unittest
+
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, inspect
+
+
+class TestAlembicMigrations(unittest.TestCase):
+    """Test suite ensuring all Alembic migrations apply cleanly and create required tables."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp(prefix="waifu_alembic_test_")
+        self.db_path = os.path.join(self.temp_dir, "migration_test.db")
+        self.db_url = f"sqlite+aiosqlite:///{self.db_path}"
+
+        self.alembic_cfg = Config("alembic.ini")
+        self.alembic_cfg.set_main_option("sqlalchemy.url", self.db_url)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_migrations_upgrade_to_head_and_verify_schema(self) -> None:
+        """Runs alembic upgrade head and asserts table structures (jobs, images, characters)."""
+        command.upgrade(self.alembic_cfg, "head")
+
+        # Inspect SQLite schema using synchronous engine
+        sync_url = f"sqlite:///{self.db_path}"
+        engine = create_engine(sync_url)
+        inspector = inspect(engine)
+
+        tables = set(inspector.get_table_names())
+        self.assertIn("jobs", tables)
+        self.assertIn("images", tables)
+        self.assertIn("characters", tables)
+        self.assertIn("alembic_version", tables)
+
+        # Verify images table columns (R43 provenance & pHash)
+        img_columns = {col["name"] for col in inspector.get_columns("images")}
+        self.assertIn("image_id", img_columns)
+        self.assertIn("phash", img_columns)
+        self.assertIn("job_id", img_columns)
+        self.assertIn("final_prompt", img_columns)
+        self.assertIn("provider", img_columns)
+        self.assertIn("is_enhanced", img_columns)
+
+        # Verify characters table columns (R14, R18 versioning)
+        char_columns = {col["name"] for col in inspector.get_columns("characters")}
+        self.assertIn("character_id", char_columns)
+        self.assertIn("version", char_columns)
+        self.assertIn("is_current", char_columns)
+        self.assertIn("edit_of", char_columns)
+        self.assertIn("appearance_facts", char_columns)
+
+
+if __name__ == "__main__":
+    unittest.main()
