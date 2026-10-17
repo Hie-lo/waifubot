@@ -98,14 +98,14 @@ Real test: `python -m pytest tests/ tests/unit/test_restart_controller.py -q && 
 
 ## Stage 9 — Plans, quotas & user self-service (R51–R55)
 
-- [ ] Alembic `0011_plans_and_usage` (seed built-in `free` and `staff` plans)
-- [ ] `core/limits.py` (pure): `Limits`, `effective_limits` — the only superadmin short-circuit (R53)
-- [ ] `services/plans.py`, `services/quota.py`: `check_and_reserve` / `settle` / `refund`, day keys in `app_timezone`; wire into `create_job` and the exact-count gate (R54)
-- [ ] `bot/auth.py`: `RequestContext` (role, blocked, plan, limits); role-based reply keyboards; staff-only callbacks → `not_authorized`
-- [ ] User generation flow: private results, *My images* viewer with delete, `max_stored_images`
-- [ ] `claiming.py`: priority → round-robin across requesters → oldest (R55)
-- [ ] Screens: *My account*; *Settings → Plans* (create/edit/delete, replacement on delete); plan assignment, expiry and per-user overrides on the user card
-- [ ] Locale keys (fa + en) for all new screens and limit messages
+- [x] Alembic `0011_plans_and_usage` (seed built-in `free` and `staff` plans)
+- [x] `core/limits.py` (pure): `Limits`, `effective_limits` — the only superadmin short-circuit (R53)
+- [x] `services/plans.py`, `services/quota.py`: `check_and_reserve` / `settle` / `refund`, day keys in `app_timezone`; wire into `create_job` and the exact-count gate (R54)
+- [x] `bot/auth.py`: `RequestContext` (role, blocked, plan, limits); role-based reply keyboards; staff-only callbacks → `not_authorized`
+- [x] User generation flow: private results, *My images* viewer with delete, `max_stored_images`
+- [x] `claiming.py`: priority → round-robin across requesters → oldest (R55)
+- [x] Screens: *My account*; *Settings → Plans* (create/edit/delete, replacement on delete); plan assignment, expiry and per-user overrides on the user card
+- [x] Locale keys (fa + en) for all new screens and limit messages
 
 Real test: `python -m pytest tests/unit/test_limits.py tests/unit/test_quota.py tests/unit/test_plans.py tests/unit/test_user_generation.py -q`
 

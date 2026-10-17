@@ -3,10 +3,13 @@
 import unittest
 
 from waifubot.bot.callbacks import (
+    AccountCallback,
     AdminCallback,
     GenActionCallback,
     GenCountCallback,
+    MyImagesCallback,
     NavCallback,
+    PlanCallback,
     ScheduleCallback,
     SettingCallback,
     StudioCharCallback,
@@ -40,6 +43,9 @@ class TestCallbackRegistry(unittest.TestCase):
             UserCallback(action="block", target_id=123456789, extra="spam"),
             ScheduleCallback(action="toggle", schedule_id=42, extra="pause"),
             SystemCallback(action="restart_bot_confirm", extra=""),
+            PlanCallback(action="view", plan_id="vip_pro", extra="1"),
+            MyImagesCallback(action="view", img_id=12345, page=2),
+            AccountCallback(action="view", extra=""),
         ]
 
         for cb in sample_callbacks:

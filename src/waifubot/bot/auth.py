@@ -1,10 +1,12 @@
-"""Authorization, blocked-user middleware, and RequestContext (R44, R48, R50, R51).
+"""Authorization, blocked-user middleware, and RequestContext (R44, R48, R50, R51, R52, R53).
 
 Contract:
-- Role, block status, and locale are derived once into RequestContext (AGENT.md §2).
+- Role, block status, plan, limits, and locale are derived once into RequestContext (AGENT.md §2).
 - Blocked users receive a single `blocked_notice` per session/restart and are otherwise ignored (R50).
 - Admins cannot be blocked from user management (R50).
 - Superadmins have role='superadmin', admins have role='admin', everyone else is role='user'.
+- Role-based reply keyboards: user never sees staff sections (R51).
+- Staff-only callbacks answer not_authorized for non-staff users (R27, R51).
 """
 
 import contextlib
@@ -14,10 +16,23 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from waifubot.core.i18n import t
+from waifubot.core.limits import Limits
 from waifubot.services.admins import get_admin
+from waifubot.services.plans import get_effective_user_limits
 from waifubot.services.users import record_user_seen
 
 _BLOCKED_NOTICED_USERS: set[int] = set()
+
+STAFF_ONLY_CALLBACK_PREFIXES = {
+    "adm",  # Admins management
+    "usr",  # Users management
+    "pln",  # Plans management
+    "sys",  # System controls
+    "sch",  # Schedules
+    "rvw",  # Review
+    "pol",  # Pool
+    "set",  # Settings
+}
 
 
 @dataclass
@@ -30,6 +45,8 @@ class RequestContext:
     locale: str = "fa"
     username: str | None = None
     name: str | None = None
+    plan_id: str = "free"
+    limits: Limits | None = None
 
     @property
     def is_superadmin(self) -> bool:
@@ -45,6 +62,37 @@ class RequestContext:
 def reset_blocked_notices() -> None:
     """Clears in-memory set of noticed blocked users (useful for test resets)."""
     _BLOCKED_NOTICED_USERS.clear()
+
+
+def is_staff_callback(callback_data: str) -> bool:
+    """Returns True if the callback is restricted to staff (R27, R51)."""
+    parts = callback_data.split(":", 2)
+    if len(parts) >= 2:
+        prefix = parts[1]
+        return prefix in STAFF_ONLY_CALLBACK_PREFIXES
+    return False
+
+
+def verify_callback_authorization(ctx: RequestContext, callback_data: str) -> bool:
+    """Checks whether the requester has permission to execute the given callback (R27, R51)."""
+    return not (is_staff_callback(callback_data) and not ctx.is_staff)
+
+
+def get_role_reply_keyboard_buttons(ctx: RequestContext) -> list[list[str]]:
+    """Returns the matrix of reply keyboard button labels for the requester's role (R2, R51)."""
+    loc = ctx.locale
+    if ctx.is_staff:
+        return [
+            [t("btn_generate", locale=loc), t("btn_characters", locale=loc)],
+            [t("btn_review", locale=loc), t("btn_pool", locale=loc)],
+            [t("btn_schedules", locale=loc), t("btn_settings", locale=loc)],
+        ]
+    else:
+        return [
+            [t("btn_generate", locale=loc), t("btn_my_images", locale=loc)],
+            [t("btn_my_characters", locale=loc), t("btn_chat", locale=loc)],
+            [t("btn_my_account", locale=loc)],
+        ]
 
 
 async def resolve_request_context(
@@ -75,6 +123,13 @@ async def resolve_request_context(
         role = "user"
         is_blocked = user_record.status == "blocked"
 
+    # Derive effective limits and active plan (R52, R53)
+    limits, plan_id = await get_effective_user_limits(
+        session=session,
+        user_id=telegram_id,
+        role=role,
+    )
+
     ctx = RequestContext(
         telegram_id=telegram_id,
         role=role,
@@ -82,6 +137,8 @@ async def resolve_request_context(
         locale=user_record.locale,
         username=user_record.username,
         name=user_record.name,
+        plan_id=plan_id,
+        limits=limits,
     )
 
     is_allowed = not is_blocked

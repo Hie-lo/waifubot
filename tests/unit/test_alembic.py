@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 
+import sqlalchemy as sa
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
@@ -43,6 +44,8 @@ class TestAlembicMigrations(unittest.TestCase):
         self.assertIn("admins", tables)
         self.assertIn("users", tables)
         self.assertIn("admin_invites", tables)
+        self.assertIn("plans", tables)
+        self.assertIn("usage_counters", tables)
 
         # Test downgrade to base and re-upgrade
         command.downgrade(self.alembic_cfg, "base")
@@ -66,6 +69,19 @@ class TestAlembicMigrations(unittest.TestCase):
         self.assertIn("is_current", char_columns)
         self.assertIn("edit_of", char_columns)
         self.assertIn("appearance_facts", char_columns)
+
+        # Verify users table columns (R52)
+        user_columns = {col["name"] for col in inspector.get_columns("users")}
+        self.assertIn("plan_id", user_columns)
+        self.assertIn("plan_expires_at", user_columns)
+        self.assertIn("limit_overrides_json", user_columns)
+
+        # Verify seeded plans
+        with engine.connect() as conn:
+            plan_rows = conn.execute(sa.text("SELECT id, is_builtin FROM plans")).fetchall()
+            plan_ids = {r[0] for r in plan_rows}
+            self.assertIn("free", plan_ids)
+            self.assertIn("staff", plan_ids)
 
 
 if __name__ == "__main__":

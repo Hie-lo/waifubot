@@ -335,3 +335,80 @@ class SystemCallback(CallbackData):
         action = parts[0] if len(parts) > 0 else ""
         extra = parts[1] if len(parts) > 1 else ""
         return cls(action=action, extra=extra)
+
+
+@registry.register
+class PlanCallback(CallbackData):
+    """Plan management callback (list, view, edit, delete, replace) (R52)."""
+
+    prefix = "pln"
+
+    def __init__(self, action: str, plan_id: str = "", extra: str = "") -> None:
+        self.action = action
+        self.plan_id = plan_id
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.plan_id}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "PlanCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        plan_id = parts[1] if len(parts) > 1 else ""
+        extra = parts[2] if len(parts) > 2 else ""
+        return cls(action=action, plan_id=plan_id, extra=extra)
+
+
+@registry.register
+class MyImagesCallback(CallbackData):
+    """My images viewer callback (view, next, prev, delete, confirm) (R51, R5)."""
+
+    prefix = "myimg"
+
+    def __init__(self, action: str, img_id: int | str = 0, page: int = 0) -> None:
+        self.action = action
+        self.img_id = img_id
+        self.page = page
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.img_id}:{self.page}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "MyImagesCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        raw_id = parts[1] if len(parts) > 1 else "0"
+        img_id: int | str = int(raw_id) if raw_id.isdigit() else raw_id
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        return cls(action=action, img_id=img_id, page=page)
+
+
+@registry.register
+class AccountCallback(CallbackData):
+    """User account callback (view, limits, stats) (R51)."""
+
+    prefix = "acc"
+
+    def __init__(self, action: str, extra: str = "") -> None:
+        self.action = action
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "AccountCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        extra = parts[1] if len(parts) > 1 else ""
+        return cls(action=action, extra=extra)

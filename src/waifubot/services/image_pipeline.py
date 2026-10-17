@@ -17,7 +17,10 @@ def compute_dhash(image_bytes: bytes) -> str:
     try:
         img = Image.open(io.BytesIO(image_bytes))
         img_gray = img.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
-        pixels = list(img_gray.getdata())
+        if hasattr(img_gray, "get_flattened_data"):
+            pixels = list(img_gray.get_flattened_data())
+        else:
+            pixels = list(img_gray.getdata())
         diff: list[bool] = []
         for row in range(8):
             for col in range(8):

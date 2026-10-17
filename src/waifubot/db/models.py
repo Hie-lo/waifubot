@@ -2,7 +2,7 @@
 
 import time
 
-from sqlalchemy import BigInteger, Float, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from waifubot.db.base import Base
@@ -168,6 +168,39 @@ class UserRecord(Base):
     block_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     joined_via: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Plans and overrides (R52)
+    plan_id: Mapped[str] = mapped_column(String(32), default="free", nullable=False)
+    plan_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    limit_overrides_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PlanRecord(Base):
+    """Named bundle of limits (R52, §3.6)."""
+
+    __tablename__ = "plans"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    limits_json: Mapped[str] = mapped_column(Text, nullable=False)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class UsageCounterRecord(Base):
+    """Daily/periodic usage tracking for quota accounting in app_timezone (R54)."""
+
+    __tablename__ = "usage_counters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    period_key: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    images: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    jobs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    chat_messages: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class AdminInviteRecord(Base):
