@@ -231,3 +231,83 @@ class SettingCallback(CallbackData):
         action = parts[1] if len(parts) > 1 else ""
         val = parts[2] if len(parts) > 2 else ""
         return cls(key=key, action=action, val=val)
+
+
+@registry.register
+class AdminCallback(CallbackData):
+    """Admin management callback (list, card, role, remove, invite) (R48)."""
+
+    prefix = "adm"
+
+    def __init__(self, action: str, target_id: int | str = 0, extra: str = "") -> None:
+        self.action = action
+        self.target_id = target_id
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.target_id}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "AdminCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        raw_target = parts[1] if len(parts) > 1 else "0"
+        target_id: int | str = int(raw_target) if raw_target.isdigit() else raw_target
+        extra = parts[2] if len(parts) > 2 else ""
+        return cls(action=action, target_id=target_id, extra=extra)
+
+
+@registry.register
+class UserCallback(CallbackData):
+    """User management callback (overview, list, card, block, unblock, del) (R50)."""
+
+    prefix = "usr"
+
+    def __init__(self, action: str, target_id: int | str = 0, extra: str = "") -> None:
+        self.action = action
+        self.target_id = target_id
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.target_id}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "UserCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        raw_target = parts[1] if len(parts) > 1 else "0"
+        target_id: int | str = int(raw_target) if raw_target.isdigit() else raw_target
+        extra = parts[2] if len(parts) > 2 else ""
+        return cls(action=action, target_id=target_id, extra=extra)
+
+
+@registry.register
+class ScheduleCallback(CallbackData):
+    """Channel schedule callback (list, view, toggle, delete) (R45)."""
+
+    prefix = "sch"
+
+    def __init__(self, action: str, schedule_id: int = 0, extra: str = "") -> None:
+        self.action = action
+        self.schedule_id = schedule_id
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.schedule_id}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "ScheduleCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        sch_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        extra = parts[2] if len(parts) > 2 else ""
+        return cls(action=action, schedule_id=sch_id, extra=extra)

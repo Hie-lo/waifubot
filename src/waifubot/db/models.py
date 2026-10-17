@@ -98,3 +98,82 @@ class CharacterRecord(Base):
     created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
 
+
+class ScheduleRecord(Base):
+    """Channel posting schedule with interval bounds and missed run policy (R45)."""
+
+    __tablename__ = "schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    post_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    random_order: Mapped[bool] = mapped_column(default=False, nullable=False)
+    min_gap_minutes: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    max_gap_minutes: Mapped[int] = mapped_column(Integer, default=180, nullable=False)
+    next_at: Mapped[float] = mapped_column(Float, index=True, nullable=False)
+    is_running: Mapped[bool] = mapped_column(default=True, nullable=False)
+    missed_run_policy: Mapped[str] = mapped_column(String(32), default="catch_up_one", nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class AuditLogRecord(Base):
+    """Audit log entry for settings modifications and admin management (R44)."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[float] = mapped_column(Float, default=time.time, index=True, nullable=False)
+    admin_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    target: Mapped[str] = mapped_column(String(128), nullable=False)
+    old_val: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_val: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AdminRecord(Base):
+    """Admin registry with soft-removal and last-superadmin invariant (R44, R48)."""
+
+    __tablename__ = "admins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="admin", nullable=False)  # admin | superadmin
+    added_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    removed_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+
+
+class UserRecord(Base):
+    """Registered Telegram user profile with status and moderation note (R50)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    locale: Mapped[str] = mapped_column(String(8), default="fa", nullable=False)
+    first_seen: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    last_seen: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True, nullable=False)  # active | blocked
+    block_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    joined_via: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class AdminInviteRecord(Base):
+    """Single-use expiring admin invite link token (R48)."""
+
+    __tablename__ = "admin_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="admin", nullable=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, index=True, nullable=False)
+    used_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    used_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+

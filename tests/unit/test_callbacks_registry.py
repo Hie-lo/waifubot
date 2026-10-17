@@ -3,13 +3,16 @@
 import unittest
 
 from waifubot.bot.callbacks import (
+    AdminCallback,
     CallbackRegistry,
     GenActionCallback,
     GenCountCallback,
     NavCallback,
+    ScheduleCallback,
     SettingCallback,
     StudioCharCallback,
     StudioOptCallback,
+    UserCallback,
     ViewerCallback,
     registry,
 )
@@ -20,7 +23,7 @@ class TestCallbackRegistry(unittest.TestCase):
 
     def test_registered_classes_not_empty(self) -> None:
         classes = registry.registered_classes()
-        self.assertGreaterEqual(len(classes), 7)
+        self.assertGreaterEqual(len(classes), 10)
 
     def test_all_callbacks_within_64_bytes_and_roundtrip(self) -> None:
         """Every registered callback must pack to <= 64 bytes and unpack identically."""
@@ -33,6 +36,9 @@ class TestCallbackRegistry(unittest.TestCase):
             GenActionCallback(action="submit", nonce="abc123xyz"),
             ViewerCallback(action="next", page=99, image_id="img_sha256_hash_12345"),
             SettingCallback(key="worker_count", action="set", val="8"),
+            AdminCallback(action="role", target_id=987654321, extra="superadmin"),
+            UserCallback(action="block", target_id=123456789, extra="spam"),
+            ScheduleCallback(action="toggle", schedule_id=42, extra="pause"),
         ]
 
         for cb in sample_callbacks:

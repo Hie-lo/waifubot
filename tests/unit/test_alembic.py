@@ -37,9 +37,19 @@ class TestAlembicMigrations(unittest.TestCase):
         self.assertIn("jobs", tables)
         self.assertIn("images", tables)
         self.assertIn("characters", tables)
-        self.assertIn("alembic_version", tables)
+        self.assertIn("schedules", tables)
+        self.assertIn("audit_log", tables)
+        self.assertIn("admins", tables)
+        self.assertIn("users", tables)
+        self.assertIn("admin_invites", tables)
 
-        # Verify images table columns (R43 provenance & pHash)
+        # Test downgrade to base and re-upgrade
+        command.downgrade(self.alembic_cfg, "base")
+        inspector_down = inspect(engine)
+        self.assertEqual(len(inspector_down.get_table_names()), 1)  # only alembic_version remains
+
+        command.upgrade(self.alembic_cfg, "head")
+
         img_columns = {col["name"] for col in inspector.get_columns("images")}
         self.assertIn("image_id", img_columns)
         self.assertIn("phash", img_columns)

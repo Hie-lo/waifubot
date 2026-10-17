@@ -15,6 +15,10 @@ SETTINGS_REGISTRY: dict[str, dict[str, Any]] = {
     "heartbeat_seconds": {"default": 20, "ceiling": 60, "type": int, "min": 5},
     "lease_ttl_seconds": {"default": 60, "ceiling": 300, "type": int, "min": 15},
     "shutdown_grace_seconds": {"default": 30, "ceiling": 120, "type": int, "min": 5},
+    "app_timezone": {"default": "Asia/Tehran", "ceiling": "Asia/Tehran", "type": str},
+    "missed_run_policy": {"default": "catch_up_one", "ceiling": "skip", "type": str},
+    "invite_ttl_hours": {"default": 48, "ceiling": 168, "type": int, "min": 1},
+    "phash_distance": {"default": 6, "ceiling": 20, "type": int, "min": 0},
 }
 
 

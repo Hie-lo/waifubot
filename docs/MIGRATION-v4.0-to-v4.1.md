@@ -74,13 +74,13 @@ Real test: `python -m pytest tests/unit/test_image_pipeline.py tests/unit/test_i
 
 ## Stage 7 — Scheduler, audit, admins & users
 
-- [ ] Alembic `0008_schedules`, `0009_audit_and_admin`, `0010_users_and_invites`
-- [ ] Multi-schedule scheduler; `app_timezone`; Jalali dates in the Persian UI; `missed_run_policy` (R45)
-- [ ] `audit_log` for settings/admin changes; superadmin audit view (R44)
-- [ ] `ADMIN_IDS` insert-if-missing; soft-disable on removal
-- [ ] `services/admins.py` + `handlers/admins.py` + Settings → Admins (R48): user-picker button, typed ID, one-time invite link, role choice, promote/demote/remove, last-superadmin invariant, notices
-- [ ] `services/users.py` + `handlers/users.py` + Settings → Users (R50): overview, paged list + filters, search, user card, block/unblock, note, language, delete record; blocked-user middleware in `bot/auth.py`
-- [ ] Locale keys for all new screens in both `fa.yaml` and `en.yaml`
+- [x] Alembic `0008_schedules`, `0009_audit_and_admin`, `0010_users_and_invites`
+- [x] Multi-schedule scheduler; `app_timezone`; Jalali dates in the Persian UI; `missed_run_policy` (R45)
+- [x] `audit_log` for settings/admin changes; superadmin audit view (R44)
+- [x] `ADMIN_IDS` insert-if-missing; soft-disable on removal
+- [x] `services/admins.py` + `handlers/admins.py` + Settings → Admins (R48): user-picker button, typed ID, one-time invite link, role choice, promote/demote/remove, last-superadmin invariant, notices
+- [x] `services/users.py` + `handlers/users.py` + Settings → Users (R50): overview, paged list + filters, search, user card, block/unblock, note, language, delete record; blocked-user middleware in `bot/auth.py`
+- [x] Locale keys for all new screens in both `fa.yaml` and `en.yaml`
 
 Real test: `python -m pytest tests/unit/test_scheduler.py tests/unit/test_audit.py tests/unit/test_admin_seed.py tests/unit/test_admin_management.py tests/unit/test_user_management.py -q`
 
