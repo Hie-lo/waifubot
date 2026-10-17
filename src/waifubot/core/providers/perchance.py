@@ -336,14 +336,29 @@ class PerchanceProvider:
             text = ""
         return detect_block(text, page.url)
 
+    LONG_PROMPT_CHARS = 120  # above this, human-paced typing takes too long
+
     async def _human_type(self, locator: Any, text: str) -> None:  # noqa: ANN201
+        """Short prompts: full human pacing. Long prompts (user 2026-10-16:
+        long jobs must finish much faster): chunked fast typing with small
+        breaths — still not one robotic fill, but several times quicker."""
         p = self._pacing
-        for ch in text:
-            await locator.type(ch)
-            delay = random.uniform(p["type_delay_ms_min"], p["type_delay_ms_max"]) / 1000.0
-            if random.random() < p["pause_chance"]:
-                delay += random.uniform(p["pause_ms_min"], p["pause_ms_max"]) / 1000.0
-            await asyncio.sleep(delay)
+        if len(text) <= self.LONG_PROMPT_CHARS:
+            for ch in text:
+                await locator.type(ch)
+                delay = random.uniform(
+                    p["type_delay_ms_min"], p["type_delay_ms_max"]
+                ) / 1000.0
+                if random.random() < p["pause_chance"]:
+                    delay += random.uniform(
+                        p["pause_ms_min"], p["pause_ms_max"]
+                    ) / 1000.0
+                await asyncio.sleep(delay)
+            return
+        chunk = 40
+        for i in range(0, len(text), chunk):
+            await locator.type(text[i : i + chunk], delay=5)
+            await asyncio.sleep(random.uniform(0.05, 0.18))
 
     async def _resolve_challenge(self, page: Any, notes: list[str], where: str) -> str:
         """A challenge page appeared. UX ladder (user rules 2026-10-16) — the
@@ -448,18 +463,30 @@ class PerchanceProvider:
         for i in range(count):
             sel = frame.locator("select").nth(i)
             try:
-                vals = [
-                    str(v).strip()
-                    for v in await sel.evaluate(
-                        "el => Array.from(el.options).map(o => o.value)"
-                    )
-                ]
+                opts = await sel.evaluate(
+                    "el => Array.from(el.options).map(o => "
+                    "[(o.value || '').trim(), (o.textContent || '').trim()])"
+                )
             except Exception:  # noqa: BLE001
                 continue
-            if str(wanted) in vals and {"2", "4", "8"}.issubset(set(vals)):
+            vals = [str(v).strip() for v, _t in opts]
+            texts = [str(t).strip() for _v, t in opts]
+            looks_like_counts = sum(
+                1 for n in ("2", "4", "8") if n in vals or n in texts
+            )
+            if looks_like_counts >= 3 and (
+                str(wanted) in vals or str(wanted) in texts
+            ):
                 try:
-                    await sel.select_option(value=str(wanted), timeout=5000)
-                    return wanted, ""
+                    if str(wanted) in vals:
+                        await sel.select_option(value=str(wanted), timeout=5000)
+                    else:
+                        await sel.select_option(label=str(wanted), timeout=5000)
+                    # verify the site actually accepted the value (never assume)
+                    applied = await sel.input_value()
+                    if str(applied).strip() == str(wanted):
+                        return wanted, ""
+                    return wanted, f"count_select_unverified:{applied}"
                 except Exception:  # noqa: BLE001
                     return wanted, "count_select_failed"
         return wanted, "count_select_not_found"
@@ -621,7 +648,7 @@ class PerchanceProvider:
             if len(collected) >= request.count:
                 break
 
-        candidates = list(collected.values())
+        candidates = list(collected.values())[: request.count]  # EXACT-or-less
         if len(candidates) >= request.count:
             return finish(STATUS_OK, candidates)
         if candidates:

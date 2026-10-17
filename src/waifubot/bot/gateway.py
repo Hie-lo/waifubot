@@ -60,6 +60,18 @@ class TelegramGateway(Protocol):
         """Edit a previously sent message (used to remove buttons after a press)."""
         ...
 
+    async def edit_message_media(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        photo_path: Path,
+        caption: str = "",
+        buttons: Buttons | None = None,
+    ) -> None:
+        """Replace the photo INSIDE an existing message (the viewer must edit
+        one message in place, never send a new photo on prev/next)."""
+        ...
+
     async def answer_callback(self, callback_id: str, text: str = "") -> None:
         """Acknowledge a callback query (always, even for stale presses)."""
         ...

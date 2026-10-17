@@ -185,6 +185,9 @@ class GenerationWorker:
             await self._push_previews(job, images)
         elif job.status == "failed":
             self._consecutive_failures += 1
+            await self._notify(self._msgs.t(
+                "job_failed_notice", job_id=job.id, error=job.error_code or "?"
+            ))
         elif job.status == "pending":
             log.info("job %s requeued (attempt %s)", job.id, job.attempt_count)
 

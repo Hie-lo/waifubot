@@ -10,6 +10,7 @@ class FakeGateway:
         self.answers: list[tuple] = []
         self.media_groups: list[tuple] = []
         self.edits: list[tuple] = []
+        self.edit_media: list[tuple] = []
         self.fail_mode: str | None = None
 
     def _maybe_fail(self) -> None:
@@ -43,6 +44,11 @@ class FakeGateway:
     async def edit_message(self, chat_id, message_id, text, buttons=None) -> None:  # noqa: ANN001
         self._maybe_fail()
         self.edits.append((chat_id, message_id, text, buttons))
+
+    async def edit_message_media(self, chat_id, message_id, photo_path,  # noqa: ANN001
+                                 caption="", buttons=None) -> None:
+        self._maybe_fail()
+        self.edit_media.append((chat_id, message_id, photo_path, caption, buttons))
 
     async def answer_callback(self, callback_id, text="") -> None:  # noqa: ANN001
         self.answers.append((callback_id, text))

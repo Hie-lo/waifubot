@@ -137,6 +137,24 @@ class PTBGateway:
             chat_id=chat_id, message_id=message_id, text=text, reply_markup=_markup(buttons)
         )
 
+    async def edit_message_media(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        photo_path: Path,
+        caption: str = "",
+        buttons: object = None,
+    ) -> None:
+        from telegram import InputMediaPhoto
+
+        with open(photo_path, "rb") as fh:
+            await self._require().edit_message_media(
+                media=InputMediaPhoto(media=fh, caption=caption or None),
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=_markup(buttons),
+            )
+
     async def answer_callback(self, callback_id: str, text: str = "") -> None:
         await self._require().answer_callback_query(callback_id, text=text or None)
 
@@ -164,6 +182,11 @@ def _inbound(update: Update) -> Inbound:
         data=data,
         update_id=update.update_id,
         callback_id=update.callback_query.id if update.callback_query else "",
+        message_id=(
+            update.callback_query.message.message_id
+            if update.callback_query and update.callback_query.message
+            else None
+        ),
     )
 
 

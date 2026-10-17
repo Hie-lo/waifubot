@@ -566,3 +566,99 @@ def test_breaker_pause_persists_across_restart(env: Env) -> None:
         assert row.value_json == "false"
 
     _run(check())
+
+
+def test_stage1_count_retry_viewer_edit_back(env: Env) -> None:
+    """Stage 1 (user 2026-10-16): exact counts incl. 6/8/16, retry for failed
+    jobs, in-place viewer edits (no new photos), back buttons, no savec for
+    character-based jobs."""
+
+    async def body() -> None:
+        from tests.unit.test_bot_units import _make_image
+
+        # 1) count buttons include 6/8/16 and the picked count is honored EXACTLY
+        await env.app.handle_message(env.msg("/generate", update_id=1))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=2))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=3))
+        count_msg = env.gw.messages[-1]
+        labels = [c for row in (count_msg[2] or []) for _l, c in row]
+        assert {"wiz:n:6", "wiz:n:8", "wiz:n:16"}.issubset(set(labels))
+        await env.app.handle_callback(env.cb("wiz:n:6", update_id=4))  # 6, not clamped
+        await env.app.handle_callback(env.cb("wiz:y", update_id=5))
+        async with env.factory() as s:
+            job = (await s.execute(select(Job))).scalars().one()
+        import json as _json
+        assert _json.loads(job.filters_json)["count"] == 6
+
+        # 2) failed job -> retry button requeues it
+        async with env.factory() as s:
+            s.add(Job(status="failed", idempotency_key="f1", prompt_snapshot="p",
+                      template_version="t", filters_json="{}", attempt_count=2,
+                      error_code="provider_error"))
+            await s.commit()
+        await env.app.handle_message(env.msg("/queue", update_id=6))
+        q_buttons = [c for row in env.gw.messages[-1][2] for _l, c in row]
+        assert any(c.startswith("retry:") for c in q_buttons)
+        retry_id = next(c for c in q_buttons if c.startswith("retry:"))
+        await env.app.handle_callback(env.cb(retry_id, update_id=7))
+        async with env.factory() as s:
+            from waifubot.db.models import Job as J
+            requeued = (await s.execute(select(J).where(J.idempotency_key == "f1"))
+                        ).scalars().one()
+        assert requeued.status == "pending" and requeued.attempt_count == 0
+
+        # 3) viewer prev/next EDITS the same message (no new photo)
+        async with env.factory() as s:
+            j2 = Job(status="succeeded", idempotency_key="v9", prompt_snapshot="p",
+                     template_version="t", filters_json="{}")
+            s.add(j2)
+            await s.flush()
+            store = env.tmp_path / "storage"
+            a = _make_image(store, j2.id, file_path="images/a.png")
+            b = _make_image(store, j2.id, file_path="images/b.png")
+            s.add_all([a, b])
+            await s.commit()
+            first_id = a.id
+        inb = env.cb(f"view:pool:{first_id}", update_id=8)
+        inb.message_id = 777  # the button lives on message 777
+        await env.app.handle_callback(inb)
+        assert len(env.gw.photos) == 0            # no new photo was sent
+        assert len(env.gw.edit_media) == 1        # the message was edited in place
+        # press Next on the same message -> another in-place edit
+        next_cb = [c for row in env.gw.edit_media[-1][4] for _l, c in row
+                   if c.startswith("view:pool:")][0]
+        inb2 = env.cb(next_cb, update_id=9)
+        inb2.message_id = 777
+        await env.app.handle_callback(inb2)
+        assert len(env.gw.photos) == 0 and len(env.gw.edit_media) == 2
+
+        # 4) back button exists in every section list
+        for cmd in ("/queue", "/pool", "/settings", "/characters"):
+            env.gw.messages.clear()
+            await env.app.handle_message(env.msg(cmd, update_id=10))
+            flat = [c for row in (env.gw.messages[-1][2] or []) for _l, c in row]
+            assert "menu:back" in flat, cmd
+
+        # 5) savec button hidden when the job used a saved character
+        async with env.factory() as s:
+            from waifubot.db.models import Character
+            ch = Character(name="Aya", identity_prompt="black hair", version=1,
+                           is_active=True)
+            s.add(ch)
+            await s.flush()
+            j3 = Job(status="succeeded", idempotency_key="c9", prompt_snapshot="p",
+                     template_version="t",
+                     filters_json=_json.dumps({"character_id": ch.id}))
+            s.add(j3)
+            await s.flush()
+            c1 = _make_image(store, j3.id, file_path="images/c.png")
+            s.add(c1)
+            await s.commit()
+            c_id = c1.id
+        inb3 = env.cb(f"view:inbox:{c_id}", update_id=11)
+        inb3.message_id = 888
+        await env.app.handle_callback(inb3)
+        flat = [c for row in env.gw.edit_media[-1][4] for _l, c in row]
+        assert not any(c.startswith("savec:") for c in flat)  # hidden!
+
+    _run(body())

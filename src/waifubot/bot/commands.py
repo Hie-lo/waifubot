@@ -25,6 +25,7 @@ from waifubot.bot.memory import DialogMemory
 from waifubot.bot.messages import Messages
 from waifubot.bot.posting import publish_group, publish_image, resolve_unknown_send
 from waifubot.bot.worker import GenerationWorker
+from waifubot.config import HARD_MAX_IMAGES_PER_JOB
 from waifubot.core.admin_settings import AdminSettings
 from waifubot.core.content_safety import validate_adult_identity
 from waifubot.core.identity import (
@@ -52,6 +53,7 @@ class Inbound:
     data: str | None = None  # callback_data
     update_id: int = 0
     callback_id: str = ""
+    message_id: int | None = None  # message the button lives on (for in-place edits)
 
 
 @dataclass
@@ -128,6 +130,8 @@ class BotApp:
                 await self._cb_group(inb, "gskip")
             elif data.startswith("cancel:"):
                 await self._cb_cancel_job(inb, data)
+            elif data.startswith("retry:"):
+                await self._cb_retry_job(inb, data)
             elif data.startswith("usechar:"):
                 await self._cb_usechar(inb, data)
             elif data.startswith("char:"):
@@ -247,34 +251,23 @@ class BotApp:
         )
 
     async def _cmd_inbox(self, inb: Inbound) -> None:
-        async with self._sessions() as s:
-            images = (
-                await s.execute(
-                    select(Image)
-                    .where(Image.status == "pending_review")
-                    .order_by(Image.id.desc()).limit(10)
-                )
-            ).scalars().all()
-        if not images:
-            await self._gw.send_message(inb.chat_id, self._msgs.t("inbox_empty"))
+        ids = await self._scope_ids("inbox")
+        if not ids:
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("inbox_empty"),
+                buttons=[[(self._msgs.t("view_back"), "menu:back")]],
+            )
             return
-        for img in images:
-            path = f"{self._cfg.storage_root}/{img.file_path}"
-            buttons: Buttons = [
-                [
-                    (self._msgs.t("review_approve"), f"appr:{img.id}"),
-                    (self._msgs.t("review_reject"), f"rej:{img.id}"),
-                ],
-                [(self._msgs.t("save_character"), f"savec:{img.job_id}")],
-            ]
-            try:
-                await self._gw.send_photo(
-                    inb.chat_id, path,
-                    caption=self._msgs.t("inbox_item", image_id=img.id, job_id=img.job_id),
-                    buttons=buttons,
-                )
-            except Exception:  # noqa: BLE001
-                log.warning("inbox preview failed (image=%s)", img.id)
+        lines = [self._msgs.t("inbox_item", image_id=i, job_id="-") for i in ids]
+        buttons: Buttons = [
+            [(self._msgs.t("inbox_view"), f"view:inbox:{ids[0]}")],
+            [(self._msgs.t("view_back"), "menu:back")],
+        ]
+        await self._gw.send_message(
+            inb.chat_id,
+            self._msgs.t("inbox_summary", count=len(ids)) + "\n" + "\n".join(lines),
+            buttons=buttons,
+        )
 
     async def _cmd_queue(self, inb: Inbound) -> None:
         async with self._sessions() as s:
@@ -282,7 +275,10 @@ class BotApp:
                 await s.execute(select(Job).order_by(Job.id.desc()).limit(10))
             ).scalars().all()
         if not jobs:
-            await self._gw.send_message(inb.chat_id, self._msgs.t("queue_empty"))
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("queue_empty"),
+                buttons=[[(self._msgs.t("view_back"), "menu:back")]],
+            )
             return
         lines = [
             self._msgs.t(
@@ -299,13 +295,23 @@ class BotApp:
                 [(self._msgs.t("queue_cancel") + f" #{j.id}", f"cancel:{j.id}")
                  for j in cancelable[:5]]
             )
-        buttons.append([(self._msgs.t("queue_refresh"), "menu:queue")])
+        retryable = [j for j in jobs if j.status in ("failed", "cancelled")]
+        if retryable:
+            buttons.append(
+                [(self._msgs.t("queue_retry") + f" #{j.id}", f"retry:{j.id}")
+                 for j in retryable[:5]]
+            )
+        buttons.append([(self._msgs.t("queue_refresh"), "menu:queue"),
+                        (self._msgs.t("view_back"), "menu:back")])
         await self._gw.send_message(inb.chat_id, "\n".join(lines), buttons=buttons)
 
     async def _cmd_pool(self, inb: Inbound) -> None:
         images = await self._pool_images()
         if not images:
-            await self._gw.send_message(inb.chat_id, self._msgs.t("pool_empty"))
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("pool_empty"),
+                buttons=[[(self._msgs.t("view_back"), "menu:back")]],
+            )
             return
         lines = [
             self._msgs.t("pool_item", image_id=img.id, status=img.status)
@@ -315,6 +321,7 @@ class BotApp:
             [(self._msgs.t("pool_view"), f"view:pool:{images[0].id}")],
             [(self._msgs.t("pool_group"), "grp"),
              (self._msgs.t("publish_pick_short"), "menu:publish")],
+            [(self._msgs.t("view_back"), "menu:back")],
         ]
         await self._gw.send_message(
             inb.chat_id,
@@ -341,6 +348,7 @@ class BotApp:
             return
         rows = [(self._msgs.t("pool_item", image_id=i.id, status=i.status), f"pub:{i.id}")
                 for i in images]
+        rows.append((self._msgs.t("view_back"), "menu:back"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("publish_pick"), buttons=_chunk(rows)
         )
@@ -354,6 +362,7 @@ class BotApp:
         await self._gw.send_message(inb.chat_id, self._msgs.t("settings_title"))
         await self._gw.send_message(inb.chat_id, "\n".join(lines))
         rows = [(k, f"set:{k}") for k in sorted(values)]
+        rows.append((self._msgs.t("view_back"), "menu:back"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("settings_ask_value", key=""), buttons=_chunk(rows)
         )
@@ -367,9 +376,13 @@ class BotApp:
                 )
             ).scalars().all()
         if not rows:
-            await self._gw.send_message(inb.chat_id, self._msgs.t("characters_empty"))
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("characters_empty"),
+                buttons=[[(self._msgs.t("view_back"), "menu:back")]],
+            )
             return
         list_rows = [(f"👤 {r.name} (v{r.version})", f"char:{r.id}") for r in rows]
+        list_rows.append((self._msgs.t("view_back"), "menu:back"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("characters_title"), buttons=_chunk(list_rows)
         )
@@ -386,17 +399,21 @@ class BotApp:
             ).all()
         return [r[0] for r in rows]
 
-    async def _cb_view(self, inb: Inbound, data: str) -> None:
-        parts = data.split(":")
-        if parts[1] == "x":
-            await self._safe_answer(inb)
-            return
-        scope, raw_id = parts[1], parts[2]
+    async def _job_has_character(self, job_id: int) -> bool:
+        async with self._sessions() as s:
+            job = await s.get(Job, job_id)
+            if job is None:
+                return False
+            filters = json.loads(job.filters_json or "{}")
+        return bool(filters.get("character_id"))
+
+    async def _viewer_payload(
+        self, scope: str, image_id: int
+    ) -> tuple[str, str, Buttons] | None:
+        """Everything the viewer shows for one image (caption, path, buttons)."""
         ids = await self._scope_ids(scope)
         if not ids:
-            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
-            return
-        image_id = int(raw_id)
+            return None
         if image_id not in ids:
             image_id = ids[0]
         pos = ids.index(image_id)
@@ -404,13 +421,12 @@ class BotApp:
             img = await s.get(Image, image_id)
             if img is None:
                 await s.commit()
-                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
-                return
+                return None
             name = await self._image_name(s, img)
             job_id = img.job_id
             is_nsfw = bool(img.is_nsfw)
             file_path = img.file_path
-        await self._safe_answer(inb)
+        has_character = await self._job_has_character(job_id)
         nav: list[tuple[str, str]] = []
         if pos > 0:
             nav.append((self._msgs.t("view_prev"), f"view:{scope}:{ids[pos - 1]}"))
@@ -430,18 +446,57 @@ class BotApp:
                 (self._msgs.t("review_approve"), f"appr:{image_id}"),
                 (self._msgs.t("review_reject"), f"rej:{image_id}"),
             ])
-            buttons.append([(self._msgs.t("save_character"), f"savec:{job_id}")])
-        buttons.append([(self._msgs.t("view_close"), "view:x")])
-        path = f"{self._cfg.storage_root}/{file_path}"
+            if not has_character:
+                # a saved character leaves nothing to save (user rule 2026-10-16)
+                buttons.append([(self._msgs.t("save_character"), f"savec:{job_id}")])
+        buttons.append([
+            (self._msgs.t("view_back"), "menu:back"),
+            (self._msgs.t("view_close"), "view:x"),
+        ])
         caption = self._msgs.t(
             "view_item", image_id=image_id, job_id=job_id,
             pos=pos + 1, total=len(ids), name=name,
             nsfw=self._msgs.t("nsfw_yes" if is_nsfw else "nsfw_no"),
         )
+        return caption, f"{self._cfg.storage_root}/{file_path}", buttons
+
+    async def _render_viewer(
+        self, inb: Inbound, scope: str, image_id: int
+    ) -> None:
+        payload = await self._viewer_payload(scope, image_id)
+        if payload is None:
+            if inb.message_id:
+                await self._gw.edit_message(
+                    inb.chat_id, inb.message_id, self._msgs.t("pool_empty"),
+                    buttons=[[(self._msgs.t("view_back"), "menu:back")]],
+                )
+            else:
+                await self._gw.send_message(inb.chat_id, self._msgs.t("pool_empty"))
+            return
+        caption, path_str, buttons = payload
+        path = Path(path_str)
+        # In-place edit when the press came from a message; never a new photo.
+        if inb.message_id:
+            try:
+                await self._gw.edit_message_media(
+                    inb.chat_id, inb.message_id, path, caption=caption, buttons=buttons
+                )
+                return
+            except Exception:  # noqa: BLE001 — fall back to a fresh send
+                log.warning("viewer edit failed; sending new (image=%s)", image_id)
         try:
             await self._gw.send_photo(inb.chat_id, path, caption=caption, buttons=buttons)
         except Exception:  # noqa: BLE001
             log.warning("viewer failed (image=%s)", image_id)
+
+    async def _cb_view(self, inb: Inbound, data: str) -> None:
+        parts = data.split(":")
+        if parts[1] == "x":
+            await self._safe_answer(inb)
+            return
+        scope, raw_id = parts[1], parts[2]
+        await self._safe_answer(inb)
+        await self._render_viewer(inb, scope, int(raw_id))
 
     async def _cb_nsfw(self, inb: Inbound, data: str) -> None:
         image_id = int(data.split(":")[1])
@@ -453,8 +508,14 @@ class BotApp:
                 return
             img.is_nsfw = not bool(img.is_nsfw)
             state = img.is_nsfw
+            status = img.status
             await s.commit()
         await self._safe_answer(inb)
+        if inb.message_id:
+            # flip the state on the SAME message (button + caption update)
+            scope = "pool" if status == "approved" else "inbox"
+            await self._render_viewer(inb, scope, image_id)
+            return
         await self._gw.send_message(
             inb.chat_id,
             self._msgs.t("nsfw_set" if state else "nsfw_unset", image_id=image_id),
@@ -600,6 +661,24 @@ class BotApp:
         await self._safe_answer(inb)
         await self._gw.send_message(inb.chat_id, self._msgs.t("queue_cancelled", job_id=job_id))
 
+    async def _cb_retry_job(self, inb: Inbound, data: str) -> None:
+        job_id = int(data.split(":")[1])
+        async with self._sessions() as s:
+            result = await s.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status.in_(("failed", "cancelled")))
+                .values(status="pending", attempt_count=0, next_attempt_at=None,
+                        error_code=None, error_summary=None)
+            )
+            await s.commit()
+        if (result.rowcount or 0) != 1:
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+            return
+        await self._safe_answer(inb)
+        await self._gw.send_message(
+            inb.chat_id, self._msgs.t("job_requeued", job_id=job_id)
+        )
+
     async def _cb_char(self, inb: Inbound, data: str) -> None:
         char_id = int(data.split(":")[1])
         async with self._sessions() as s:
@@ -611,7 +690,8 @@ class BotApp:
         await self._safe_answer(inb)
         buttons: Buttons = [
             [(self._msgs.t("char_generate"), f"usechar:{char_id}")],
-            [(self._msgs.t("view_close"), "view:x")],
+            [(self._msgs.t("view_back"), "menu:characters"),
+             (self._msgs.t("menu_back"), "menu:back")],
         ]
         await self._gw.send_message(
             inb.chat_id,
@@ -713,9 +793,9 @@ class BotApp:
     SITE_COUNTS = (2, 4, 6, 8, 16)  # the site produces 2/4/6/8/16/32 (32 > hard max)
 
     async def _ask_count(self, inb: Inbound) -> None:
-        max_count = await self._settings.get_or("images_per_job", 4)
-        allowed = [c for c in self.SITE_COUNTS if c <= max_count] or [2]
-        rows = [(str(i), f"wiz:n:{i}") for i in allowed]
+        # User 2026-10-16: ALL site options (2/4/6/8/16) are always offered;
+        # images_per_job is only the DEFAULT for a random pick, never a hidden cap.
+        rows = [(str(i), f"wiz:n:{i}") for i in self.SITE_COUNTS]
         rows.append((self._msgs.t("wiz_random"), "wiz:n:rnd"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_count_ask"), buttons=_chunk(rows)
@@ -770,12 +850,15 @@ class BotApp:
                     )
                     style_lock = (row.style_lock or None) if row else None
             validate_adult_identity(identity, self._cfg.blocklist)
+            default_count = await self._settings.get_or("images_per_job", 4)
             count = (
                 int(dialog.get("count") or 0)
-                or random.choice(list(self.SITE_COUNTS))
+                or min(self.SITE_COUNTS, key=lambda c: abs(c - default_count))
             )
             style_lock = style_lock or await self._settings.get("style_lock")
-            max_images = await self._settings.get_or("images_per_job", 4)
+            # The explicit count the user picked is honored exactly (up to the
+            # site set / hard safety cap) - images_per_job is NOT a hidden clamp.
+            max_images = HARD_MAX_IMAGES_PER_JOB
             max_jobs = await self._settings.get_or("daily_cap", 20)
             async with self._sessions() as s:
                 job = await create_job(
@@ -835,6 +918,17 @@ class BotApp:
             img.status = "approved" if approve else "rejected"
             await s.commit()
         await self._safe_answer(inb)
+        if inb.message_id:
+            # the reviewer is inside the viewer: jump to the next image in place
+            ids = await self._scope_ids("inbox")
+            if ids:
+                await self._render_viewer(inb, "inbox", ids[0])
+                return
+            await self._gw.edit_message(
+                inb.chat_id, inb.message_id, self._msgs.t("inbox_empty"),
+                buttons=[[(self._msgs.t("view_back"), "menu:back")]],
+            )
+            return
         await self._gw.send_message(
             inb.chat_id,
             self._msgs.t(
