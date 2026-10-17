@@ -52,12 +52,12 @@ Manual measurement (no live provider in CI): run the mock provider with 1/2/3/4 
 
 ## Stage 5 — Bot refactor
 
-- [ ] Split `bot/commands.py` into `panel.py` + `handlers/*`
-- [ ] `bot/callbacks.py`: typed `CallbackData` registry (R41) and registry test (R8)
-- [ ] Per-admin lock, instant `answer_callback_query`, panel versions, edit-failure fallback (R40); panel key by `(admin, chat)`
-- [ ] Rate limiter + flood-wait handling (R42); `file_id` cache
-- [ ] Wizard state: versioned pydantic state with TTL in `user_memory`
-- [ ] Special Character Studio wizard in `bot/handlers/generate.py`: click-only preset composition (R16B) mirroring Vision Lab `sync()` contract
+- [x] Split `bot/commands.py` into `panel.py` + `handlers/*`
+- [x] `bot/callbacks.py`: typed `CallbackData` registry (R41) and registry test (R8)
+- [x] Per-admin lock, instant `answer_callback_query`, panel versions, edit-failure fallback (R40); panel key by `(admin, chat)`
+- [x] Rate limiter + flood-wait handling (R42); `file_id` cache
+- [x] Wizard state: versioned pydantic state with TTL in `user_memory`
+- [x] Special Character Studio wizard in `bot/handlers/generate.py`: click-only preset composition (R16B) mirroring Vision Lab `sync()` contract
 
 Real test: `python -m pytest tests/test_bot_flow.py tests/unit/test_callbacks_registry.py tests/unit/test_panel_engine.py -q`
 
