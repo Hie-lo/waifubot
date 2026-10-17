@@ -50,6 +50,10 @@ ignore = ["E501"]
 include = ["src", "tests"]
 typeCheckingMode = "basic"
 pythonVersion = "3.13"
+executionEnvironments = [
+    { root = "src/waifubot/core", typeCheckingMode = "strict" },
+    { root = "src/waifubot/services", typeCheckingMode = "strict" },
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -91,3 +95,27 @@ forbidden_modules = [
     "waifubot.bot",
     "waifubot.services",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Database layer isolation"
+type = "forbidden"
+source_modules = ["waifubot.db"]
+forbidden_modules = [
+    "waifubot.bot",
+    "waifubot.services",
+]
+
+[[tool.importlinter.contracts]]
+name = "Bot layer adapters isolation (except composition root)"
+type = "forbidden"
+source_modules = [
+    "waifubot.bot.handlers",
+    "waifubot.bot.panel",
+    "waifubot.bot.callbacks",
+    "waifubot.bot.auth",
+    "waifubot.bot.dialogs",
+]
+forbidden_modules = [
+    "waifubot.adapters",
+]
+

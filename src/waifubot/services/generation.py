@@ -61,3 +61,17 @@ def manual_retry_job(job: GenerationJob) -> GenerationJob:
     job.needed = job.target_count - len(job.kept_images)
     job.status = JobStatus.PENDING
     return job
+
+
+class GenerationService:
+    """Orchestrates job lifecycle, exact-count gate, and top-up progress (R9, R38)."""
+
+    def __init__(self, clock: object | None = None) -> None:
+        self.clock = clock
+
+    def process_batch(self, job: GenerationJob, batch_images: list[ImageAsset]) -> GenerationJob:
+        return process_job_batch(job, batch_images)
+
+    def manual_retry(self, job: GenerationJob) -> GenerationJob:
+        return manual_retry_job(job)
+

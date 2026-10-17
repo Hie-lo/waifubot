@@ -20,11 +20,11 @@ Real test: `python -m pytest tests/unit/test_generation_service.py tests/unit/te
 
 ## Stage 2 — Layer cleanup
 
-- [ ] Create `core/ports.py`; move provider/enhancer/storage interfaces there
-- [ ] Move `core/providers/**`, `core/http.py`, `core/ai_enhance.py` → `adapters/`; rename `stealth` header naming to "standard browser headers" in code and docs
-- [ ] Move `telegram_html.py`, `topics.py` → `bot/`
-- [ ] Add `import-linter` contracts (ARCHITECTURE §3) and pyright (strict on `core`, `services`)
-- [ ] Composition root in `bot/app.py`
+- [x] Create `core/ports.py`; move provider/enhancer/storage interfaces there
+- [x] Move `core/providers/**`, `core/http.py`, `core/ai_enhance.py` → `adapters/`; rename `stealth` header naming to "standard browser headers" in code and docs
+- [x] Move `telegram_html.py`, `topics.py` → `bot/`
+- [x] Add `import-linter` contracts (ARCHITECTURE §3) and pyright (strict on `core`, `services`)
+- [x] Composition root in `bot/app.py`
 
 Real test: `lint-imports && python -m pyright && python -m pytest tests/ -q`
 
