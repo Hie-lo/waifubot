@@ -1,0 +1,96 @@
+# Identity trait pools (user request 2026-10-16: random characters must differ,
+# and the save-character flow must build a PRECISE identity prompt that keeps
+# face and details stable across generations).
+#
+# Data, not logic (same rule as tags_pool.yaml). Values are ENGLISH prompt
+# fragments (the generator's prompt language); fa/en are button labels only.
+# Every assembled identity is adult-only (minor protection, SPEC §2.3): the
+# assembler always prefixes `prefix` and an adult age.
+version: "1"
+template_version: "identity-v1"
+# No forced adult/gender framing (user 2026-10-16: the site has no such limit).
+prefix: ""
+# Anchors appended to the face traits of a *precise* (savec) identity — they
+# tell the model to keep facial details consistent. Never added to a user's
+# free-hand identity (exact identity preservation).
+face_anchors: "detailed face, consistent facial features"
+
+ages:
+  - {value: 22, fa: "۲۲ ساله", en: "22 years old"}
+  - {value: 25, fa: "۲۵ ساله", en: "25 years old"}
+  - {value: 28, fa: "۲۸ ساله", en: "28 years old"}
+  - {value: 31, fa: "۳۱ ساله", en: "31 years old"}
+  - {value: 35, fa: "۳۵ ساله", en: "35 years old"}
+
+hair_colors:
+  - {value: "black", fa: "مشکی", en: "Black"}
+  - {value: "brown", fa: "قهوه‌ای", en: "Brown"}
+  - {value: "blonde", fa: "بلوند", en: "Blonde"}
+  - {value: "red", fa: "قرمز/جینجر", en: "Red"}
+  - {value: "blue", fa: "آبی", en: "Blue"}
+  - {value: "light blue", fa: "آبی روشن", en: "Light blue"}
+  - {value: "pink", fa: "صورتی", en: "Pink"}
+  - {value: "purple", fa: "بنفش", en: "Purple"}
+  - {value: "silver", fa: "نقره‌ای", en: "Silver"}
+  - {value: "white", fa: "سفید", en: "White"}
+  - {value: "green", fa: "سبز", en: "Green"}
+  - {value: "orange", fa: "نارنجی", en: "Orange"}
+
+hair_styles:
+  - {value: "long straight", fa: "صاف و بلند", en: "Long straight"}
+  - {value: "long wavy", fa: "مجعد بلند", en: "Long wavy"}
+  - {value: "shoulder-length", fa: "تا شانه", en: "Shoulder-length"}
+  - {value: "short bob", fa: "کوتاه باب", en: "Short bob"}
+  - {value: "ponytail", fa: "دم‌اسبی", en: "Ponytail"}
+  - {value: "twintails", fa: "دو دم اسبی", en: "Twintails"}
+  - {value: "curly", fa: "فرفری", en: "Curly"}
+  - {value: "messy", fa: "شلوغ و نامرتب", en: "Messy"}
+
+eye_colors:
+  - {value: "blue", fa: "آبی", en: "Blue"}
+  - {value: "green", fa: "سبز", en: "Green"}
+  - {value: "brown", fa: "قهوه‌ای", en: "Brown"}
+  - {value: "hazel", fa: "فندقی", en: "Hazel"}
+  - {value: "purple", fa: "بنفش", en: "Purple"}
+  - {value: "red", fa: "قرمز", en: "Red"}
+  - {value: "gold", fa: "طلایی", en: "Gold"}
+  - {value: "gray", fa: "خاکستری", en: "Gray"}
+
+skin_tones:
+  - {value: "fair", fa: "روشن", en: "Fair"}
+  - {value: "pale", fa: "خیلی روشن", en: "Pale"}
+  - {value: "light", fa: "گندمی روشن", en: "Light"}
+  - {value: "tan", fa: "گندمی", en: "Tan"}
+  - {value: "medium", fa: "متوسط", en: "Medium"}
+
+face_shapes:
+  - {value: "oval", fa: "بیضی", en: "Oval"}
+  - {value: "round", fa: "گرد", en: "Round"}
+  - {value: "soft", fa: "نرم و ظریف", en: "Soft"}
+  - {value: "sharp", fa: "تیز و مشخص", en: "Sharp"}
+  - {value: "heart-shaped", fa: "قلبی", en: "Heart-shaped"}
+
+# numeric traits (custom numbers allowed; quick buttons below)
+heights:
+  - {value: "155", fa: "۱۵۵ سانتی‌متر", en: "155 cm"}
+  - {value: "160", fa: "۱۶۰ سانتی‌متر", en: "160 cm"}
+  - {value: "165", fa: "۱۶۵ سانتی‌متر", en: "165 cm"}
+  - {value: "170", fa: "۱۷۰ سانتی‌متر", en: "170 cm"}
+  - {value: "175", fa: "۱۷۵ سانتی‌متر", en: "175 cm"}
+
+body_types:
+  - {value: "slim", fa: "لاغر (Slim)", en: "Slim"}
+  - {value: "petite", fa: "ریزه (Petite)", en: "Petite"}
+  - {value: "average", fa: "معمولی (Average)", en: "Average"}
+  - {value: "curvy", fa: "توپُر (Curvy)", en: "Curvy"}
+  - {value: "chubby", fa: "چاق (Chubby)", en: "Chubby"}
+  - {value: "athletic", fa: "ورزشکاری (Athletic)", en: "Athletic"}
+  - {value: "muscular", fa: "عضلانی (Muscular)", en: "Muscular"}
+
+# body part sizes / proportions (needed for NSFW) - presets + custom text
+body_proportions:
+  - {value: "balanced proportions", fa: "متناسب", en: "Balanced"}
+  - {value: "petite bust, narrow waist", fa: "ریزه‌اندام", en: "Petite figure"}
+  - {value: "large bust, wide hips", fa: "اندام درشت", en: "Generous curves"}
+  - {value: "hourglass figure", fa: "ساعت شنی", en: "Hourglass"}
+  - {value: "long legs, slender arms", fa: "پاهای کشیده", en: "Long legs"}

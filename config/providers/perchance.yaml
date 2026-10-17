@@ -1,0 +1,62 @@
+# Perchance provider configuration — BASELINE FROM THE USER'S WORKING POC.
+# Selectors and values are proven on the user's machine (Sprint 0), but treated
+# as "verify, never assume" at every adapter change (Sprint 2).
+# Switching providers/pages must be a config change only (SPEC §3).
+name: perchance_playwright
+page_url: "https://perchance.org/ai-text-to-image-generator"
+output_iframe: "#outputIframeEl"
+selectors:
+  prompt_textarea: "textarea[data-name='description']"
+  style_select: "select[data-name='artStyle']"
+  generate_button: "button#generateButtonEl"
+
+# Provider style values (per-provider mapping, SPEC §7). User decision 2026-10-16:
+# "Anime" (not "Soft Anime"); "" = no style (style goes in the prompt instead).
+# The spike prints the page's real option values — verify exact values in Sprint 2.
+style_values:
+  anime: "ref:optionKeyName:Anime"
+  soft_anime: "ref:optionKeyName:Soft Anime"
+  no_style: ""
+
+# User-approved automation profile (AGENT.md amendment log, 2026-10-16).
+# CAPTCHA solving / challenge bypass / proxy rotation remain prohibited.
+launch:
+  # Default: NO window (user UX rule 2026-10-16). A window opens only when a
+  # Cloudflare challenge needs a real browser, starts MINIMIZED (never on top,
+  # never steals focus), works underneath, and closes when the batch ends.
+  # `--headed` on live-smoke overrides this for debugging.
+  headless: true
+  open_minimized: true
+  # Windowless mode: run a REAL headed browser on an invisible Xvfb display when the
+  # "Xvfb" binary exists (auto). Pages see a normal windowed browser (no challenge),
+  # and nothing appears on the desktop. Install once: sudo apt install -y xvfb.
+  # "false" disables it; --headless forces pure headless; --headed forces a real window.
+  virtual_display: "auto"
+  # Full Chromium build (new headless mode) — Playwright's default headless uses a
+  # stripped "headless shell" that pages detect and serve a degraded UI to
+  # (user test 2026-10-16: textarea never appeared in the shell). channel:"chromium"
+  # makes headless and headed use the SAME full browser binary.
+  channel: "chromium"
+  slow_mo_ms: 100
+  user_data_dir: "./user_data"
+  args:
+    - "--disable-blink-features=AutomationControlled"
+  # Fast human pacing (user request 2026-10-16: typing was too slow).
+  # If the provider blocks us again, raise to 40-120ms + pause_chance 0.1.
+  human_pacing:
+    type_delay_ms_min: 15
+    type_delay_ms_max: 45
+    pause_chance: 0.05
+    pause_ms_min: 120
+    pause_ms_max: 350
+
+limits:
+  timeout_s: 240
+  poll_interval_s: 3.0
+  # 2000 (was 5000): simple/small images were silently dropped — a 4-image
+  # request came back with 3 (user test 2026-10-16). PIL still validates.
+  min_data_url_chars: 2000
+  include_canvas_fallback: false
+  # Wait up to N seconds for a HUMAN to approve Cloudflare/challenge pages in the
+  # visible browser window (we never solve them). 0 = treat as blocked immediately.
+  challenge_wait_s: 180

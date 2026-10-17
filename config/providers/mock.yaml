@@ -1,0 +1,7 @@
+# Mock provider configuration (Sprint 1b — no network, used in tests and the CLI).
+name: mock
+mode: ok            # ok | partial | malformed | blocked | timeout | error | empty
+width: 512
+height: 512
+delay_s: 0.0        # per-image simulated delay (progressive arrival)
+partial_count: 2    # images produced in "partial" mode

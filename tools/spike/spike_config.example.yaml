@@ -19,5 +19,25 @@ generate_button: "button#generateButtonEl"
 output_iframe: "#outputIframeEl"
 
 # Optional
-style_value: ""         # e.g. "Soft Anime" if verified
-prompt: "a friendly anime girl, soft lighting, high quality"
+# Style: user decision 2026-10-16 — "Anime" instead of "Soft Anime" so the intended
+# design comes out of the prompts. Leave "" ("no style") to not touch the select and
+# specify the style inside the prompt instead. If selection fails, the run prints the
+# page's real option values — use one of those (never guess).
+style_value: "ref:optionKeyName:Anime"
+prompt: "masterpiece, anime girl, blue hair, smiling, high quality"
+user_data_dir: "./user_data"   # persistent browser profile; "" = fresh profile each run
+
+# Human typing pacing (user request 2026-10-16: faster than 40-120ms).
+type_delay_ms_min: 15
+type_delay_ms_max: 45
+pause_chance: 0.05
+pause_ms_min: 120
+pause_ms_max: 350
+
+# Browser automation profile — user decision 2026-10-16: match the user's working
+# PoC (plain automation is blocked at the generate step; this profile works).
+# CAPTCHA solving / challenge bypass / proxy rotation remain prohibited.
+slow_mo_ms: 100
+launch_args:
+  - "--disable-blink-features=AutomationControlled"
+include_canvas_fallback: true   # PoC extraction fallback (canvas->jpeg); spike-only

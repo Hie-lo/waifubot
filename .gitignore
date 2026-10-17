@@ -29,6 +29,7 @@ storage/spike_out/
 storage/*.db
 browser_profile/
 user_data/
+logs/
 
 # OS
 .DS_Store

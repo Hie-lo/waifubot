@@ -6,7 +6,7 @@
 
 - **Provider candidate (baseline):** `https://perchance.org/ai-text-to-image-generator` (configurable; can be switched to another page/provider later without code changes).
 - **Other candidate pages (comparison only if baseline fails):** `https://perchance.org/vision-lab-studio`, `https://perchance.org/ai-character-generator`, `https://perchance.org`.
-- **Automation method:** browser automation (Playwright async first; Selenium as fallback if needed), plain fill/click, no stealth/bypass.
+- **Automation method:** browser automation (Playwright async — Selenium dropped 2026-10-16: the provider's bot checks detect it and return bot errors; user live experience). Plain fill/click first; on 2026-10-16 a controlled spike run with plain `fill()` was blocked by the provider, and the user then explicitly approved human-paced char-by-character typing with small natural pauses before clicks (this is the SPEC §4 "controlled test proves required" case). **Second update (2026-10-16):** a run with human-paced typing was still blocked at the generate step; the user explicitly directed the agent to adopt the automation profile of their working PoC — persistent profile, `slow_mo=100`, human-paced typing, and the Chromium argument `--disable-blink-features=AutomationControlled`. That profile is approved for the spike and for the provider adapter while it remains required to obtain output (user decision; see the AGENT.md amendment log). **Third update (2026-10-16):** typing may be fast (15–45 ms/char, user request). CAPTCHA solving, challenge-page bypass, proxy rotation, and extra retries remain prohibited.
 - **Mode:** visible window first (WSLg); headless only if separately tested and permitted.
 - **Rate:** to be measured in Sprint 0; conservative default spacing between runs (starting default: 30 s). Hard maximums in config.
 - **Public posting:** user states ownership/rights are theirs and posting to public/private channels is permitted. (Agent note: this is a user assertion, not a verified document; if monetization is added later, re-verify A7.)
@@ -15,7 +15,16 @@
 
 ## Non-negotiable safety behavior (applies to every sprint)
 
-- On CAPTCHA, challenge, explicit rate limit, or access-denied page: stop the job, record `blocked_by_provider`, notify admin. No stealth flags, no bypass, no proxy rotation, no extra retries.
+- On CAPTCHA, challenge, explicit rate limit, or access-denied page: in headless runs the
+  browser window is REOPENED visibly (same profile) so the **user** can tick the challenge;
+  after approval the window closes and the work continues headless. In visible runs the
+  adapter waits in the open window (config `challenge_wait_s`, default 180 s; bounded
+  `MAX_CHALLENGE_RESTARTS=2`) (user decision 2026-10-16; the automation itself never solves
+  it). If it does not clear within the budget: stop the job, record `blocked_by_provider`,
+  notify admin. No stealth flags, no bypass, no proxy rotation, no extra retries.
+  **Pending user test:** if this flow cannot work (headless not accepted by the provider, or
+  approval does not carry back to headless), the user has authorized as FALLBACK human-like
+  mouse simulation to tick the checkbox — to be implemented only after the test results.
 - Selectors live in one adapter/config module; treated as baseline to verify, never assumed.
 - Live checks are manual, opt-in, in `tests/manual/`. CI uses mock provider only.
 
