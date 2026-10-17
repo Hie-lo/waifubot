@@ -1,6 +1,6 @@
 # WaifuBot — Specification v4.0
 
-**Product:** a multi-admin Telegram bot (Persian-first UI, full English locale) that generates anime character images through replaceable anti-captcha providers, lets admins curate them into a pool, and publishes approved images — directly to channels, as albums to groups, or on a schedule from the pool. It carries a character-identity system (appearance facts separate from scenes), an AI-enhance step for prompts, and NSFW support with spoilers.
+**Product:** a multi-admin Telegram bot (Persian-first UI, full English locale) that generates mostly anime character images through replaceable anti-captcha providers, lets admins curate them into a pool, and publishes approved images — directly to channels, as albums to groups, or on a schedule from the pool. It carries a character-identity system (appearance facts separate from scenes), an AI-enhance step for prompts, and NSFW support with spoilers.
 
 **Environment:** Debian on WSL2, 16 GB RAM, Intel i5-12400, no usable GPU inside WSL (upgradeable).
 
@@ -51,7 +51,7 @@ These are binding behavior rules. Every change must preserve them; the review pa
 ### 2.1 UI & navigation
 
 - **R1 — Interactive-first.** Every action is a button/menu where possible; typed input only where the user must type (prompts, names, captions, scenes). Toggles are buttons, never "type 1/0".
-- **R2 — Bottom keyboard = sections.** The persistent reply keyboard holds the main sections (labels from locales; main buttons live in the bottom keyboard area). Pressing a bottom button — or typing a command — **starts a NEW panel message** under the user's message (the press is visible chat activity; the answer must sit right under it).
+- **R2 — Bottom keyboard = sections.** The reply keyboard holds the main sections (labels from locales; main buttons live in the bottom keyboard area). Pressing a bottom button — or typing a command — **starts a NEW panel message** under the user's message (the press is visible chat activity; the answer must sit right under it).
 - **R3 — One panel per menu.** Every interaction *inside* a menu (inline buttons, wizard steps, typed dialog answers) **edits the same panel message in place** — never a new message. Tracked in `PanelMemory` (`settings.panel:<admin_id>` → JSON `[chat_id, message_id]`).
 - **R4 — Back & close.** Every screen except the main menu has a working **back** button (to the previous level); every panel has a **close** button (deletes the panel message, hides the reply keyboard). The main reply keyboard is non-persistent (`is_persistent=False`).
 - **R5 — Viewer edits in place.** Pool and inbox viewers: prev/next/toggles **edit the same message** (`edit_message_media` / `edit_message_caption`); closing strips the buttons and leaves the photo. Never a new photo per navigation press.
@@ -74,7 +74,7 @@ These are binding behavior rules. Every change must preserve them; the review pa
 
 ### 2.3 Characters & identity
 
-- **R14 — Character data = appearance facts ONLY:** name, anime, age (18+), height, hair/eye/skin color, face shape, body type, body-part sizes (NSFW). No actions, expressions, poses, clothes, or scenes in character data.
+- **R14 — Character data = appearance facts ONLY:** name, anime, age, height, hair/eye/skin color, face shape, body type, body-part sizes (NSFW). No actions, expressions, poses, clothes, or scenes in character data.
 - **R15 — Scene at generation.** The user types the scene/action per generation; prompt build combines **facts first, scene after** (facts override templates, never the reverse).
 - **R16 — Known characters.** The user types name + anime (example provided in the dialog); AI-enhance may append canonical details.
 - **R17 — Save button policy.** The "save character" button appears **only** on generated-image jobs. Jobs generated *from* a saved character must never show it.
@@ -95,8 +95,7 @@ These are binding behavior rules. Every change must preserve them; the review pa
 ### 2.6 Settings & safety
 
 - **R25 — Everything is changeable in the bot.** The settings panel exposes every runtime knob; `.env` supplies *defaults and operational secrets only*. Code-level **safety ceilings** (max concurrent jobs 20, workers 100) bound user input. Values save on change and apply immediately (workers re-read settings per iteration).
-- **R26 — Content policy.** The site has no adult restriction, so **none is imposed**. **Minor protection stays:** blocklist + rejection of any prompt that states a minor age — including "age 17"/"aged 17" — + numeric age validation ≥ 18 (character traits).
-- **R27 — No silent dead ends.** Unauthorized actions answer with `not_authorized` (not silence).
+- **R26 — No silent dead ends.** Unauthorized actions answer with `not_authorized` (not silence).
 
 ### 2.7 Anti-captcha & challenges
 
