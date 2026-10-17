@@ -152,6 +152,7 @@ class Post(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

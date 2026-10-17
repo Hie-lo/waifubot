@@ -110,6 +110,7 @@ async def publish_image(
     post.telegram_message_id = message_id
     post.sent_at = datetime.now(UTC)
     post.last_error = None
+    post.caption = caption
     image.status = "published"
     await session.flush()
     return PublishOutcome(status="sent", post=post, message_id=message_id)
@@ -222,6 +223,7 @@ async def publish_group(
             outcome.post.status = "sent"
             outcome.post.telegram_message_id = str(mid)
             outcome.post.sent_at = datetime.now(UTC)
+            outcome.post.caption = caption[:CAPTION_MAX_CHARS]
             img.status = "published"
         except TimeoutError:
             outcome.status = "unknown"
@@ -260,6 +262,7 @@ async def publish_group(
         outcome.post.status = "sent"
         outcome.post.telegram_message_id = str(mid) if mid is not None else None
         outcome.post.sent_at = datetime.now(UTC)
+        outcome.post.caption = caption[:CAPTION_MAX_CHARS]
         img.status = "published"
     await session.flush()
     return outcomes

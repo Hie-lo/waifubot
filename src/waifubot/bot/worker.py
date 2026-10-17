@@ -25,7 +25,7 @@ from waifubot.bot.gateway import TelegramGateway
 from waifubot.bot.messages import Messages
 from waifubot.core.image_pipeline import ImagePipeline
 from waifubot.core.image_provider import ImageProvider
-from waifubot.db.models import Image, Job
+from waifubot.db.models import Image, Job, Setting
 from waifubot.services.generation import claim_job, execute_job
 
 log = logging.getLogger(__name__)
@@ -68,12 +68,29 @@ class GenerationWorker:
     def paused(self) -> bool:
         return self._paused
 
-    def pause(self) -> None:
+    async def pause(self, *, source: str = "admin") -> None:
+        """Pause AND persist (SPEC §10: only a human resumes). A breaker or
+        disk pause must survive a restart exactly like /pause does."""
         self._paused = True
+        async with self._sessions() as s:
+            row = await s.get(Setting, "runtime_paused")
+            if row is None:
+                s.add(Setting(key="runtime_paused", value_json="true",
+                              updated_by=source))
+            else:
+                row.value_json = "true"
+                row.updated_at = datetime.now(UTC)
+            await s.commit()
 
     async def resume(self) -> None:
         self._paused = False
         self._consecutive_failures = 0
+        async with self._sessions() as s:
+            row = await s.get(Setting, "runtime_paused")
+            if row is not None:
+                row.value_json = "false"
+                row.updated_at = datetime.now(UTC)
+            await s.commit()
         await self._notify(self._msgs.t("resumed"))
 
     def start(self) -> None:
@@ -108,7 +125,7 @@ class GenerationWorker:
                     await asyncio.sleep(self._poll_s)
                     continue
                 if not self._disk_ok():
-                    self._paused = True
+                    await self.pause(source="disk")
                     free_gb = shutil.disk_usage(self._storage_root).free // 1024**3
                     await self._notify(self._msgs.t("disk_low", free=f"{free_gb}GB"))
                     continue
@@ -179,7 +196,7 @@ class GenerationWorker:
             await self._close_browser()
 
         if self._consecutive_failures >= BREAKER_THRESHOLD and not self._paused:
-            self._paused = True
+            await self.pause(source="breaker")
             await self._notify(self._msgs.t("breaker_tripped", count=self._consecutive_failures))
 
     async def _close_browser(self) -> None:

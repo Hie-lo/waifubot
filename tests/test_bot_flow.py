@@ -537,3 +537,32 @@ def test_review_round4_regressions(env: Env) -> None:
         assert filters["style_value"] == "ref:optionKeyName:Anime"  # default_style
 
     _run(body())
+
+
+def test_breaker_pause_persists_across_restart(env: Env) -> None:
+    """SPEC §10: a breaker/disk pause must survive a restart — only a human
+    resumes (review finding 2026-10-16)."""
+
+    from waifubot.db.models import Setting
+
+    async def body() -> None:
+        await env.worker.pause(source="breaker")
+        assert env.worker.paused is True
+        async with env.factory() as s:
+            row = await s.get(Setting, "runtime_paused")
+            assert row is not None and row.value_json == "true"
+
+    _run(body())
+    env.build()  # "restart": fresh worker on the same database
+    assert env.worker.paused is False  # memory state resets...
+
+    async def check() -> None:
+        async with env.factory() as s:
+            row = await s.get(Setting, "runtime_paused")
+        assert row is not None and row.value_json == "true"  # ...but the pause persisted
+        await env.worker.resume()
+        async with env.factory() as s:
+            row = await s.get(Setting, "runtime_paused")
+        assert row.value_json == "false"
+
+    _run(check())

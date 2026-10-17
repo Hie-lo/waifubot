@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from waifubot.bot.auth import AdminGate
@@ -175,29 +175,14 @@ class BotApp:
         elif cmd == "/settings":
             await self._cmd_settings(inb)
         elif cmd == "/pause":
-            self._worker.pause()
-            await self._persist_paused(True)
+            await self._worker.pause(source="admin")
             await self._gw.send_message(inb.chat_id, self._msgs.t("paused"))
         elif cmd == "/resume":
             await self._worker.resume()
-            await self._persist_paused(False)
         elif cmd == "/characters":
             await self._cmd_characters(inb)
         else:
             await self._gw.send_message(inb.chat_id, self._msgs.t("help"))
-
-    async def _persist_paused(self, paused: bool) -> None:
-        async with self._sessions() as s:
-            from waifubot.db.models import Setting
-
-            row = await s.get(Setting, "runtime_paused")
-            if row is None:
-                s.add(Setting(key="runtime_paused", value_json=json.dumps(paused),
-                              updated_by="bot"))
-            else:
-                row.value_json = json.dumps(paused)
-                row.updated_at = datetime.now(UTC)
-            await s.commit()
 
     async def _cmd_status(self, inb: Inbound) -> None:
         stats = await self._worker.queue_stats()
@@ -601,15 +586,17 @@ class BotApp:
 
     async def _cb_cancel_job(self, inb: Inbound, data: str) -> None:
         job_id = int(data.split(":")[1])
+        # Conditional update: never cancel a job the worker has just claimed.
         async with self._sessions() as s:
-            job = await s.get(Job, job_id)
-            if job is None or job.status != "pending":
-                await s.commit()
-                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
-                return
-            job.status = "cancelled"
-            job.error_code = "cancelled_by_admin"
+            result = await s.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status == "pending")
+                .values(status="cancelled", error_code="cancelled_by_admin")
+            )
             await s.commit()
+        if (result.rowcount or 0) != 1:
+            await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+            return
         await self._safe_answer(inb)
         await self._gw.send_message(inb.chat_id, self._msgs.t("queue_cancelled", job_id=job_id))
 

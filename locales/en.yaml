@@ -2,17 +2,15 @@
 app_name: "WaifuBot"
 welcome: "Welcome to WaifuBot! I manage your image pipeline."
 help: |
-  Commands:
-  /generate — generate images (step-by-step wizard)
-  /inbox — review new images (approve / reject / save character)
-  /queue — generation queue
-  /pool — approved, unpublished images
-  /publish — publish to the channel now
-  /characters — list characters
-  /settings — settings
-  /status — system status
-  /pause — pause generation
-  /resume — resume generation
+  📱 Everything is buttons and menus — just press /menu:
+  🎨 Generate — step-by-step wizard (style → character → count → confirm)
+  📥 Review inbox — approve/reject, save a character with a precise face prompt
+  🗂 Approved pool — view one by one, mark NSFW (spoiler), publish
+  📤 Group post — several photos with a caption in one album
+  ⏳ Queue — job status and cancellation
+  👤 Characters — generate with a saved character
+  ⚙️ Settings — every option is changeable
+  Text commands still work: /generate /inbox /queue /pool /publish /characters /settings /status /pause /resume
 not_authorized: "You are not authorized."
 error_generic: "Something went wrong. Please try again."
 status: "Status: {state}"
