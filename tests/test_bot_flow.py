@@ -973,3 +973,163 @@ def test_stage4_bottom_reply_keyboard(env: Env) -> None:
         assert d is not None and d["identity"] == "purple hair"
 
     _run(body())
+
+
+def test_debug_pass_regressions(env: Env) -> None:
+    """Full-project debug pass (user 2026-10-17): known-mode editing keeps the
+    known model, corrupt details_json never blocks editing, foreign trait
+    callbacks are rejected, 'age 17' is blocked, wizard screens have a home
+    button, and message errors are reported instead of silent."""
+
+    async def body() -> None:
+        from sqlalchemy import select as sa_select
+
+        from waifubot.db.models import Character
+
+        # seed a KNOWN character with corrupt details_json
+        async with env.factory() as s:
+            s.add(Character(
+                name="Rem", version=1, is_active=True,
+                identity_prompt="Rem (from Re:Zero), accurate original design",
+                details_json="{corrupt json!!",
+            ))
+            await s.commit()
+
+        # 1) corrupt details_json: editing still works (falls back gracefully)
+        async with env.factory() as s:
+            row = (await s.execute(sa_select(Character))).scalars().first()
+            await s.commit()
+        await env.app.handle_callback(env.cb(f"savec:editc:{row.id}", update_id=1))
+        d = await env.memory.get(ADMIN_ID)
+        assert d is not None and d.get("edit_of") == "Rem"
+        # unknown original mode + no traits -> precise path (asks traits)
+        assert d["step"].startswith("trait:")
+
+        # 2) foreign trait callbacks are rejected (no crash, no garbage)
+        await env.app.handle_callback(env.cb("savec:t:evil:666", update_id=2))
+        d = await env.memory.get(ADMIN_ID)
+        assert "evil" not in (d.get("traits") or {})
+        await env.app.handle_callback(env.cb("savec:tr:evil", update_id=3))
+        await env.app.handle_callback(env.cb("savec:cust:evil", update_id=4))
+        d = await env.memory.get(ADMIN_ID)
+        assert not (d.get("step") or "").endswith("evil")
+
+        # finish the edit normally -> new version, parent link kept
+        for _trait in ("age", "height", "hair_color", "hair_style", "eye_color",
+                       "skin", "face", "body_type", "body_proportions"):
+            d = await env.memory.get(ADMIN_ID)
+            if d.get("step", "").startswith("trait:"):
+                cur = d["step"].split(":", 1)[1]
+                await env.app.handle_callback(env.cb(f"savec:cust:{cur}", update_id=10))
+                await env.app.handle_message(env.msg("22", update_id=11))
+        await env.app.handle_callback(env.cb("savec:tx", update_id=12))
+        await env.app.handle_callback(env.cb("savec:ok", update_id=13))
+        assert "نسخه 2" in env.gw.messages[-1][1]
+        async with env.factory() as s:
+            rows = (await s.execute(sa_select(Character))).scalars().all()
+            await s.commit()
+        by_ver = {r.version: r for r in rows}
+        assert not by_ver[1].is_active and by_ver[2].is_active
+        assert by_ver[2].parent_id == by_ver[1].id
+
+        # 3) known-mode character: edit keeps the known model (name+anime)
+        async with env.factory() as s:
+            s.add(Character(
+                name="Holo", version=1, is_active=True,
+                identity_prompt="Holo (from Spice and Wolf), accurate design",
+                details_json='{"mode": "known", "traits": {}, "extras": "", '
+                             '"known_name": "Holo", "known_anime": "Spice and Wolf"}',
+            ))
+            await s.commit()
+            holo = (await s.execute(sa_select(Character).where(
+                Character.name == "Holo"))).scalars().first()
+            await s.commit()
+        await env.app.handle_callback(env.cb(f"savec:editc:{holo.id}", update_id=20))
+        d = await env.memory.get(ADMIN_ID)
+        assert d["mode"] == "known" and d["step"] == "known_name"
+        await env.app.handle_message(env.msg("Holo", update_id=21))   # name ok
+        await env.app.handle_message(env.msg("Spice and Wolf", update_id=22))
+        await env.app.handle_callback(env.cb("savec:ok", update_id=23))
+        assert "نسخه 2" in env.gw.messages[-1][1]
+        async with env.factory() as s:
+            rows = (await s.execute(sa_select(Character).where(
+                Character.name == "Holo"))).scalars().all()
+            await s.commit()
+        v2 = [r for r in rows if r.version == 2][0]
+        assert "Spice and Wolf" in v2.identity_prompt  # known model intact
+        assert "accurate" in v2.identity_prompt
+
+        # 4) minor protection: 'age 17' / 'aged 17' / '17 years old' rejected
+        from waifubot.core.content_safety import validate_adult_identity
+
+        for bad in ("age 17", "aged 17", "she is 17 years old", "17-year-old girl"):
+            try:
+                validate_adult_identity(bad, ("lolicon",))
+            except Exception:  # noqa: BLE001 - any rejection is a pass
+                pass
+            else:
+                raise AssertionError(f"minor age not rejected: {bad!r}")
+        validate_adult_identity("age 25, green eyes", ("lolicon",))  # ok
+
+        # 5) wizard screens carry a home button (back rule, user 2026-10-16)
+        await env.app.handle_message(env.msg("/generate", update_id=30))
+        for expect in ("wiz_style_ask", "wiz_character_ask", "wiz_scene_ask",
+                       "wiz_count_ask"):
+            labels = [b[1] for row in (env.gw.messages[-1][2] or []) for b in row]
+            assert "menu:back" in labels, expect
+            if expect == "wiz_style_ask":
+                await env.app.handle_callback(env.cb("wiz:s:anime", update_id=31))
+            elif expect == "wiz_character_ask":
+                await env.app.handle_callback(env.cb("wiz:c:-1", update_id=32))
+            elif expect == "wiz_scene_ask":
+                await env.app.handle_callback(env.cb("wiz:sk", update_id=33))
+
+        # 6) message errors are REPORTED (handle_message has a safety net)
+        async def boom(*_a, **_k):  # noqa: ANN001, ANN002, ANN202
+            raise RuntimeError("simulated failure")
+
+        original = env.app._cmd_queue
+        env.app._cmd_queue = boom  # noqa: SLF001
+        await env.app.handle_message(env.msg("/queue", update_id=40))
+        env.app._cmd_queue = original  # noqa: SLF001
+        assert any("خطا" in m[1] for m in env.gw.messages[-2:])  # error_generic
+
+    _run(body())
+
+
+def test_provider_crash_never_strands_a_job(env: Env) -> None:
+    """Debug pass 2026-10-17: a raw provider exception takes the normal
+    retry/failed path with an admin notice — never a stuck 'running' row."""
+
+    async def body() -> None:
+        from sqlalchemy import select as sa_select
+
+        from waifubot.core.providers.mock import MockProvider
+        from waifubot.db.models import Job
+
+        env.provider = MockProvider({"mode": "crash"})
+        env.worker._provider = env.provider  # noqa: SLF001
+
+        async with env.factory() as s:
+            s.add(Job(status="pending", idempotency_key="crash1",
+                      prompt_snapshot="p", template_version="t",
+                      filters_json='{"count": 1}', attempt_count=0))
+            await s.commit()
+            job_id = (await s.execute(sa_select(Job))).scalars().one().id
+
+        # attempt 1: transient -> requeued (pending), not stuck in running
+        await env.worker._run_one(job_id)  # noqa: SLF001
+        async with env.factory() as s:
+            job = await s.get(Job, job_id)
+            await s.commit()
+        assert job.status == "pending" and job.error_code == "provider_error"
+
+        # attempt 2: attempts exhausted -> failed + the admin is notified
+        await env.worker._run_one(job_id)  # noqa: SLF001
+        async with env.factory() as s:
+            job = await s.get(Job, job_id)
+            await s.commit()
+        assert job.status == "failed"
+        assert any(str(job_id) in m[1] for m in env.gw.messages)  # job_failed_notice
+
+    _run(body())

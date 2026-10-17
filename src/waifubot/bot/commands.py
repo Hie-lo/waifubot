@@ -101,21 +101,25 @@ class BotApp:
     async def handle_message(self, inb: Inbound) -> None:
         if not self._gate.allow(inb.user_id):
             return
-        text = (inb.text or "").strip()
-        if text.startswith("/"):
-            await self._command(inb, text.split()[0].split("@")[0].lower())
-            return
-        # Stage 4: the bottom reply keyboard sends labels as text — route
-        # them like the inline menu. A main-nav press always navigates (and
-        # abandons any open dialog, like every modern bot).
-        nav_cmd = self._main_label_map().get(text)
-        if nav_cmd is not None:
-            await self._memory.clear(inb.user_id)
-            await self._command(inb, nav_cmd)
-            return
-        dialog = await self._memory.get(inb.user_id)
-        if dialog:
-            await self._dialog_input(inb, dialog)
+        try:
+            text = (inb.text or "").strip()
+            if text.startswith("/"):
+                await self._command(inb, text.split()[0].split("@")[0].lower())
+                return
+            # Stage 4: the bottom reply keyboard sends labels as text — route
+            # them like the inline menu. A main-nav press always navigates (and
+            # abandons any open dialog, like every modern bot).
+            nav_cmd = self._main_label_map().get(text)
+            if nav_cmd is not None:
+                await self._memory.clear(inb.user_id)
+                await self._command(inb, nav_cmd)
+                return
+            dialog = await self._memory.get(inb.user_id)
+            if dialog:
+                await self._dialog_input(inb, dialog)
+        except Exception:  # noqa: BLE001 — a bad message must never crash the bot
+            log.exception("message failed (text=%s)", (inb.text or "")[:40])
+            await self._gw.send_message(inb.chat_id, self._msgs.t("error_generic"))
 
     async def handle_callback(self, inb: Inbound) -> None:
         if not self._gate.allow(inb.user_id):
@@ -258,6 +262,7 @@ class BotApp:
             (key, f"wiz:s:{key}") for key in sorted(self._cfg.style_values)
         ]
         style_rows.append((self._msgs.t("wiz_random"), "wiz:s:rnd"))
+        style_rows.append((self._msgs.t("menu_back"), "menu:back"))
         await self._memory.set(inb.user_id, {"kind": "generate", "step": "style"})
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_style_ask"), buttons=_chunk(style_rows)
@@ -839,6 +844,7 @@ class BotApp:
         rows = [(c.name, f"wiz:c:{c.id}") for c in chars]
         rows.append((self._msgs.t("wiz_character_oneoff"), "wiz:c:0"))
         rows.append((self._msgs.t("wiz_random"), "wiz:c:-1"))
+        rows.append((self._msgs.t("menu_back"), "menu:back"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_character_ask"), buttons=_chunk(rows)
         )
@@ -848,7 +854,10 @@ class BotApp:
     async def _ask_scene(self, inb: Inbound) -> None:
         """Optional user scene prompt (pose/expression/clothes/activity/background)
         — combined with the character details at confirm (user 2026-10-16)."""
-        buttons: Buttons = [[(self._msgs.t("wiz_skip"), "wiz:sk")]]
+        buttons: Buttons = [
+            [(self._msgs.t("wiz_skip"), "wiz:sk")],
+            [(self._msgs.t("menu_back"), "menu:back")],
+        ]
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_scene_ask"), buttons=buttons
         )
@@ -858,6 +867,7 @@ class BotApp:
         # images_per_job is only the DEFAULT for a random pick, never a hidden cap.
         rows = [(str(i), f"wiz:n:{i}") for i in self.SITE_COUNTS]
         rows.append((self._msgs.t("wiz_random"), "wiz:n:rnd"))
+        rows.append((self._msgs.t("menu_back"), "menu:back"))
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("wiz_count_ask"), buttons=_chunk(rows)
         )
@@ -1078,22 +1088,59 @@ class BotApp:
             if row is None or not row.is_active:
                 await self._safe_answer(inb, self._msgs.t("wiz_stale"))
                 return
-            details = json.loads(row.details_json or "{}")
+            try:
+                details = json.loads(row.details_json or "{}")
+                if not isinstance(details, dict):
+                    details = {}
+            except (ValueError, TypeError):
+                details = {}  # corrupt details_json must never block editing
+            orig_mode = str(details.get("mode") or "")
             traits = dict(details.get("traits") or extract_traits(
                 self._idpool, row.identity_prompt
             ))
-            first = self._first_missing_trait(traits)
-            await self._memory.set(inb.user_id, {
-                "kind": "editc", "mode": "editc", "orig_name": row.name,
-                "name": row.name, "precise": True,
-                "traits": traits, "extras": details.get("extras") or "",
-                "step": f"trait:{first}",
-            })
+            base = {
+                "kind": "editc", "edit_of": row.name,
+                "name": row.name,
+                "extras": details.get("extras") or "",
+                "traits": traits,
+            }
+            if orig_mode == "known":
+                # keep the known-character model: correct name + anime only
+                base.update({
+                    "mode": "known", "precise": True,
+                    "known_name": details.get("known_name") or row.name,
+                    "known_anime": details.get("known_anime") or "",
+                    "step": "known_name",
+                })
+            elif orig_mode == "manual" and not traits:
+                # free-text character: correct the description itself
+                base.update({
+                    "mode": "manual", "precise": False,
+                    "identity": row.identity_prompt,
+                    "step": "identity",
+                })
+            else:
+                first = self._first_missing_trait(traits)
+                base.update({
+                    "mode": "precise", "precise": True,
+                    "known_name": "", "known_anime": "",
+                    "step": f"trait:{first}",
+                })
+            await self._memory.set(inb.user_id, base)
             await self._safe_answer(inb)
             await self._gw.send_message(
                 inb.chat_id, self._msgs.t("editc_start", name=row.name)
             )
-            await self._ask_trait(inb, {"traits": traits}, first)
+            if base["step"] == "known_name":
+                await self._gw.send_message(
+                    inb.chat_id, self._msgs.t("savec_known_name_ask")
+                )
+            elif base["step"] == "identity":
+                await self._gw.send_message(
+                    inb.chat_id, self._msgs.t("savec_identity_ask")
+                )
+            else:
+                await self._ask_trait(inb, base, base["step"].split(":", 1)[1])
             return
         if action.isdigit():
             job_id = int(action)
@@ -1145,6 +1192,9 @@ class BotApp:
             await self._gw.send_message(inb.chat_id, self._msgs.t("savec_identity_ask"))
         elif action == "t":  # savec:t:<trait>:<value>
             trait, value = parts[2], ":".join(parts[3:])
+            if trait not in TRAIT_ORDER:  # stale/foreign button
+                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+                return
             try:
                 value = validate_trait_value(trait, value)
             except ValidationError as e:
@@ -1170,6 +1220,9 @@ class BotApp:
                 await self._ask_trait(inb, dialog, nxt)
         elif action == "tr":  # random pick for this trait (skipped = random)
             trait = parts[2]
+            if trait not in TRAIT_ORDER:  # stale/foreign button
+                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+                return
             values = self._idpool.values(trait)
             dialog.setdefault("traits", {})[trait] = random.choice(values).value
             nxt = self._next_trait(dialog)
@@ -1189,6 +1242,9 @@ class BotApp:
             await self._savec_review(inb, dialog)
         elif action == "cust":  # free text for this trait instead of buttons
             trait = parts[2]
+            if trait not in TRAIT_ORDER:  # stale/foreign button
+                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+                return
             dialog["step"] = f"trait_custom:{trait}"
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
@@ -1316,22 +1372,15 @@ class BotApp:
             "known_anime": dialog.get("known_anime") or "",
         }
         async with self._sessions() as s:
-            if dialog.get("mode") == "editc":
-                # edit = a NEW version of the same character (history is kept)
-                name = dialog.get("orig_name") or name
-                prev = (
-                    await s.execute(
-                        select(Character).where(Character.name == name)
-                        .order_by(Character.version.desc()).limit(1)
-                    )
-                ).scalars().first()
-            else:
-                prev = (
-                    await s.execute(
-                        select(Character).where(Character.name == name)
-                        .order_by(Character.version.desc()).limit(1)
-                    )
-                ).scalars().first()
+            # edit = a NEW version (parent link keeps the history); the lookup
+            # is by the ORIGINAL name so a corrected name still versions up
+            prev_name = dialog.get("edit_of") or name
+            prev = (
+                await s.execute(
+                    select(Character).where(Character.name == prev_name)
+                    .order_by(Character.version.desc()).limit(1)
+                )
+            ).scalars().first()
             if prev is not None:
                 prev.is_active = False
             row = Character(
@@ -1439,6 +1488,12 @@ class BotApp:
             return
         if step and step.startswith("trait_custom:"):
             trait = step.split(":", 1)[1]
+            if trait not in TRAIT_ORDER:  # corrupted dialog state
+                await self._memory.clear(inb.user_id)
+                await self._gw.send_message(
+                    inb.chat_id, self._msgs.t("wiz_stale")
+                )
+                return
             try:
                 value = validate_trait_value(trait, text)
             except ValidationError as e:

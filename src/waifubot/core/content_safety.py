@@ -21,7 +21,9 @@ from waifubot.errors import ConfigError, ValidationError
 # A stated age below 18 anywhere in the prompt is always rejected.
 # (Review 2026-10-16: the hyphen form "17-year-old" previously slipped through.)
 MINOR_AGE_RE = re.compile(
-    r"\b(?:[1-9]|1[0-7])\s*[- ]?\s*(?:years?[\s-]*old|yo)\b", re.IGNORECASE
+    r"\b(?:[1-9]|1[0-7])\s*[- ]?\s*(?:years?[\s-]*old|yo)\b"
+    r"|\bage(?:d)?\s*(?:is\s*)?(?:1[0-7]|[1-9])\b",
+    re.IGNORECASE,
 )
 
 def load_blocklist(path: Path) -> tuple[str, ...]:

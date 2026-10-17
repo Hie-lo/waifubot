@@ -70,6 +70,8 @@ class MockProvider:
                 error_code=ERROR_BLOCKED,
                 error_summary="mock: challenge page simulated",
             )
+        if self._mode == "crash":  # raw exception (not a normalized result)
+            raise RuntimeError("mock: provider crashed hard")
         if self._mode == "error":
             return GenerationResult(
                 status=STATUS_ERROR,

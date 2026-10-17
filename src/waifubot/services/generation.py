@@ -12,6 +12,7 @@ with backoff 30 s then 120 s (SPEC §10).
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -164,16 +165,29 @@ async def execute_job(
     """
     filters = json.loads(job.filters_json or "{}")
     count = int(filters.get("count") or 1)
-    result = await provider.generate(
-        GenerationRequest(
-            prompt=job.prompt_snapshot,
-            count=count,
-            style_value=str(filters.get("style_value") or ""),
-            timeout_s=float(filters.get("timeout_s") or 240.0),
-            job_id=job.id,
-            metadata={"seed": str(filters.get("seed") or "")},
+    try:
+        result = await provider.generate(
+            GenerationRequest(
+                prompt=job.prompt_snapshot,
+                count=count,
+                style_value=str(filters.get("style_value") or ""),
+                timeout_s=float(filters.get("timeout_s") or 240.0),
+                job_id=job.id,
+                metadata={"seed": str(filters.get("seed") or "")},
+            )
         )
-    )
+    except Exception as e:  # noqa: BLE001 — a raw provider crash must take the
+        # normal error path (retry/failed + admin notice); re-raising would
+        # strand the row in 'running' until the next restart (debug 2026-10-17)
+        log.exception("provider crashed for job %s", job.id)
+        result = GenerationResult(
+            status=STATUS_ERROR,
+            candidates=[],
+            elapsed_s=0.0,
+            provider=str(getattr(provider, "name", "unknown")),
+            error_code=ERROR_PROVIDER,
+            error_summary=_summary(f"crash: {type(e).__name__}"),
+        )
 
     if result.status in (STATUS_BLOCKED, STATUS_ERROR, STATUS_TIMEOUT):
         code = result.error_code or {
@@ -267,3 +281,5 @@ async def run_generation_job(
     return await execute_job(
         session, provider=provider, pipeline=pipeline, job=claimed, allow_retry=False
     )
+
+log = logging.getLogger(__name__)

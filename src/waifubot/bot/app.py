@@ -277,6 +277,9 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
     async def on_callback(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await bot_app.handle_callback(_inbound(update))
 
+    async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        log.error("telegram update failed", exc_info=ctx.error)
+
     async def post_init(_app: Application) -> None:
         # Async startup INSIDE the Application's loop (SPEC §10 recovery).
 
@@ -305,6 +308,7 @@ def build_app(settings: Settings) -> tuple[Application, GenerationWorker, BotApp
     gateway.bind(app.bot)
     app.add_handler(CommandHandler(list(COMMANDS), on_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    app.add_error_handler(on_error)
     app.add_handler(CallbackQueryHandler(on_callback))
     return app, worker, bot_app
 
