@@ -136,14 +136,22 @@ class BotApp:
         try:
             text = (inb.text or "").strip()
             if text.startswith("/"):
+                # a typed command is a FRESH request: answer with a NEW menu
+                # message right under it (user rule 2026-10-17 — only the
+                # bottom keyboard / commands start a new panel; everything
+                # inside a menu edits the same message)
+                await self._panels.clear(inb.user_id)
                 await self._command(inb, text.split()[0].split("@")[0].lower())
                 return
             # Stage 4: the bottom reply keyboard sends labels as text — route
             # them like the inline menu. A main-nav press always navigates (and
-            # abandons any open dialog, like every modern bot).
+            # abandons any open dialog, like every modern bot) and, because the
+            # user's press appears as a chat message, it gets a NEW menu panel
+            # under it — while in-menu dialogs never create new messages.
             nav_cmd = self._main_label_map().get(text)
             if nav_cmd is not None:
                 await self._memory.clear(inb.user_id)
+                await self._panels.clear(inb.user_id)
                 await self._command(inb, nav_cmd)
                 return
             dialog = await self._memory.get(inb.user_id)

@@ -1144,6 +1144,8 @@ def test_menu_navigation_fixes_and_single_panel(env: Env) -> None:
     panel message for the whole menu, working back/close, working delete."""
 
     async def body() -> None:
+        import json
+
         from waifubot.db.models import Image, Job, Setting
 
         # ---- single panel: sections EDITS the same message ----------------
@@ -1211,6 +1213,28 @@ def test_menu_navigation_fixes_and_single_panel(env: Env) -> None:
         await env.app.handle_callback(close)
         last_edit = env.gw.edit_media[-1]
         assert last_edit[1] == 77 and last_edit[4] == []  # buttons stripped
+
+        # ---- bottom keyboard = NEW menu; in-menu dialogs = SAME message ---
+        await env.app.handle_message(env.msg("/menu", update_id=30))
+        async with env.factory() as s:
+            row = await s.get(Setting, f"panel:{ADMIN_ID}")
+            await s.commit()
+        old_panel = json.loads(row.value_json)[1]
+        await env.app.handle_message(env.msg("🎨 ساخت تصویر", update_id=31))
+        async with env.factory() as s:
+            row = await s.get(Setting, f"panel:{ADMIN_ID}")
+            await s.commit()
+        new_panel = json.loads(row.value_json)[1]
+        assert new_panel != old_panel  # a NEW menu message under the press
+        # ...and the wizard dialogs INSIDE it edit that same message
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=32))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=33))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=34))
+        async with env.factory() as s:
+            row = await s.get(Setting, f"panel:{ADMIN_ID}")
+            await s.commit()
+        assert json.loads(row.value_json)[1] == new_panel  # never a new menu
+        assert new_panel in {e[1] for e in env.gw.edits}  # steps were edits
 
         # ---- ai_enhance_enabled is a TOGGLE, model is gone ----------------
         await env.app.handle_message(env.msg("/settings", update_id=20))
