@@ -8,13 +8,13 @@ Rules of engagement (AGENT.md, R30): **one stage at a time**; each stage ends wi
 
 Goal: remove contradictions and dead code before moving anything.
 
-- [ ] R9 gate: compare `kept == N`; truncate surplus (`surplus_dropped`); update `services/generation.py`
-- [ ] R38: top-up budget, zero-progress streak, fresh run on manual retry (counters stored on the job)
-- [ ] R39: enhancer output → `safety` re-check; timeout; soft-fail with explanation
-- [ ] R26/R27 wording applied in `safety.py` docstrings, `auth.py`, locale keys (`not_authorized`)
-- [ ] Delete `db/worker.py`; remove unused locale keys
-- [ ] Docs: adopt the new SPEC / ARCHITECTURE / AGENT / CHANGELOG split
-- [ ] Tooling baseline: `uv`, `ruff format`, `pre-commit` (+ `gitleaks`), CI skeleton, `SecretStr` for secrets
+- [x] R9 gate: compare `kept == N`; truncate surplus (`surplus_dropped`); update `services/generation.py`
+- [x] R38: top-up budget, zero-progress streak, fresh run on manual retry (counters stored on the job)
+- [x] R39: enhancer output → `safety` re-check; timeout; soft-fail with explanation
+- [x] R26/R27 wording applied in `safety.py` docstrings, `auth.py`, locale keys (`not_authorized`)
+- [x] Delete `db/worker.py`; remove unused locale keys
+- [x] Docs: adopt the new SPEC / ARCHITECTURE / AGENT / CHANGELOG split
+- [x] Tooling baseline: `uv`, `ruff format`, `pre-commit` (+ `gitleaks`), CI skeleton, `SecretStr` for secrets
 
 Real test: `python -m pytest tests/unit/test_generation_service.py tests/unit/test_content_safety.py tests/unit/test_locale.py -q`
 

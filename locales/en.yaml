@@ -1,0 +1,10 @@
+# English locale (en.yaml)
+not_authorized: "You do not have permission to perform this action."
+blocked_notice: "Your account has been blocked. Reason: {reason}"
+safety_rejected_minor: "Prompt contains minor-depicting terms, which violates content safety policy."
+safety_rejected_real_person: "Prompts depicting real persons are not permitted."
+job_succeeded: "Generation completed successfully! Produced {count} images."
+job_failed_partial: "Generation undercount: got {kept}/{target} images. Tap retry to continue."
+job_failed_no_images: "Generation failed: no valid images were produced. Tap retry to try again."
+job_failed_retrying: "Top-up attempt {round} of {max_rounds}. Need {needed} more images..."
+interrupted_notice: "Job {job_id} was interrupted and has been requeued."
