@@ -69,3 +69,28 @@ face_shapes:
   - {value: "soft", fa: "نرم و ظریف", en: "Soft"}
   - {value: "sharp", fa: "تیز و مشخص", en: "Sharp"}
   - {value: "heart-shaped", fa: "قلبی", en: "Heart-shaped"}
+
+# numeric traits (custom numbers allowed; quick buttons below)
+heights:
+  - {value: "155", fa: "۱۵۵ سانتی‌متر", en: "155 cm"}
+  - {value: "160", fa: "۱۶۰ سانتی‌متر", en: "160 cm"}
+  - {value: "165", fa: "۱۶۵ سانتی‌متر", en: "165 cm"}
+  - {value: "170", fa: "۱۷۰ سانتی‌متر", en: "170 cm"}
+  - {value: "175", fa: "۱۷۵ سانتی‌متر", en: "175 cm"}
+
+body_types:
+  - {value: "slim", fa: "لاغر (Slim)", en: "Slim"}
+  - {value: "petite", fa: "ریزه (Petite)", en: "Petite"}
+  - {value: "average", fa: "معمولی (Average)", en: "Average"}
+  - {value: "curvy", fa: "توپُر (Curvy)", en: "Curvy"}
+  - {value: "chubby", fa: "چاق (Chubby)", en: "Chubby"}
+  - {value: "athletic", fa: "ورزشکاری (Athletic)", en: "Athletic"}
+  - {value: "muscular", fa: "عضلانی (Muscular)", en: "Muscular"}
+
+# body part sizes / proportions (needed for NSFW) - presets + custom text
+body_proportions:
+  - {value: "balanced proportions", fa: "متناسب", en: "Balanced"}
+  - {value: "petite bust, narrow waist", fa: "ریزه‌اندام", en: "Petite figure"}
+  - {value: "large bust, wide hips", fa: "اندام درشت", en: "Generous curves"}
+  - {value: "hourglass figure", fa: "ساعت شنی", en: "Hourglass"}
+  - {value: "long legs, slender arms", fa: "پاهای کشیده", en: "Long legs"}

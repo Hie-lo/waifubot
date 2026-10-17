@@ -292,7 +292,8 @@ def test_review_fixes_regression(env: Env) -> None:
         await env.app.handle_callback(env.cb("wiz:s:anime", update_id=3))
         await env.app.handle_callback(env.cb("wiz:c:-1", update_id=4))
         dialog = await env.memory.get(ADMIN_ID)
-        assert dialog.get("step") == "count"  # not 'identity'
+        assert dialog.get("step") == "scene"  # not 'identity'
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=50))  # skip scene
         await env.app.handle_callback(env.cb("wiz:n:2", update_id=5))
         await env.app.handle_callback(env.cb("wiz:y", update_id=6))
         async with env.factory() as s:
@@ -348,8 +349,10 @@ def test_precise_face_prompt_wizard_and_menu(env: Env) -> None:
         await env.app.handle_callback(env.cb("savec:p", update_id=10))  # precise
         # choose every trait explicitly (no randomness in this test)
         picks = [
-            ("age", "25"), ("hair_color", "black"), ("hair_style", "ponytail"),
-            ("eye_color", "green"), ("skin", "fair"), ("face", "oval"),
+            ("age", "25"), ("height", "165"), ("hair_color", "black"),
+            ("hair_style", "ponytail"), ("eye_color", "green"), ("skin", "fair"),
+            ("face", "oval"), ("body_type", "slim"),
+            ("body_proportions", "average"),
         ]
         uid = 11
         for trait, value in picks:
@@ -360,7 +363,8 @@ def test_precise_face_prompt_wizard_and_menu(env: Env) -> None:
         async with env.factory() as s:
             row = (await s.execute(select(Character))).scalars().one()
         assert row.name == "Sakura"
-        assert row.identity_prompt.startswith("25 years old")
+        assert row.identity_prompt.startswith("Sakura")  # professional order
+        assert "25 years old" in row.identity_prompt and "165cm tall" in row.identity_prompt
         assert "black ponytail hair" in row.identity_prompt
         assert "green eyes" in row.identity_prompt
         assert "oval face" in row.identity_prompt
@@ -484,7 +488,7 @@ def test_pool_viewer_and_pause_menu_context(env: Env) -> None:
         await env.app.handle_callback(env.cb("char:1", update_id=8))
         await env.app.handle_callback(env.cb("usechar:1", update_id=9))
         d = await env.memory.get(ADMIN_ID)
-        assert d["step"] == "count" and d["character_id"] == 1
+        assert d["step"] == "scene" and d["character_id"] == 1
 
     _run(body())
 
@@ -527,6 +531,7 @@ def test_review_round4_regressions(env: Env) -> None:
                             version=1, is_active=True))
             await s.commit()
         await env.app.handle_callback(env.cb("usechar:1", update_id=10))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=30))  # skip scene
         await env.app.handle_callback(env.cb("wiz:n:2", update_id=11))
         await env.app.handle_callback(env.cb("wiz:y", update_id=12))
         async with env.factory() as s:
@@ -580,6 +585,7 @@ def test_stage1_count_retry_viewer_edit_back(env: Env) -> None:
         await env.app.handle_message(env.msg("/generate", update_id=1))
         await env.app.handle_callback(env.cb("wiz:s:anime", update_id=2))
         await env.app.handle_callback(env.cb("wiz:c:-1", update_id=3))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=30))  # skip scene
         count_msg = env.gw.messages[-1]
         labels = [c for row in (count_msg[2] or []) for _l, c in row]
         assert {"wiz:n:6", "wiz:n:8", "wiz:n:16"}.issubset(set(labels))
@@ -660,5 +666,127 @@ def test_stage1_count_retry_viewer_edit_back(env: Env) -> None:
         await env.app.handle_callback(inb3)
         flat = [c for row in env.gw.edit_media[-1][4] for _l, c in row]
         assert not any(c.startswith("savec:") for c in flat)  # hidden!
+
+    _run(body())
+
+
+def test_stage2_structured_character_edit_and_scene(env: Env) -> None:
+    """Stage 2 (user 2026-10-16): known-character flow with guiding example,
+    numeric age/height validation, free-text value for every trait, edit
+    creates a NEW version, and the generate wizard combines the user's scene
+    prompt with the character facts in prompt_snapshot."""
+
+    async def body() -> None:
+        from sqlalchemy import select as sa_select
+
+        # make one job so savec has a source (savec:<job_id> starts the dialog)
+        await env.app.handle_message(env.msg("/generate", update_id=1))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=2))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=3))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=4))
+        await env.app.handle_callback(env.cb("wiz:n:1", update_id=5))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=6))
+        async with env.factory() as s:
+            job_id = (await s.execute(sa_select(Job))).scalars().one().id
+
+        # ---- known-character flow (typed name + anime) -------------------
+        await env.app.handle_callback(env.cb(f"savec:{job_id}", update_id=10))
+        await env.app.handle_message(env.msg("tmp", update_id=11))  # name step
+        await env.app.handle_callback(env.cb("savec:k", update_id=12))
+        assert "Rem" in env.gw.messages[-1][1]  # guiding example
+        await env.app.handle_message(env.msg("Rem", update_id=3))
+        assert "Re:Zero" in env.gw.messages[-1][1]  # anime ask w/ example
+        await env.app.handle_message(env.msg("Re:Zero", update_id=4))
+        assert "Re:Zero" in env.gw.messages[-1][1]  # review shows both
+        await env.app.handle_callback(env.cb("savec:ok", update_id=5))
+        assert "نسخه 1" in env.gw.messages[-1][1]
+        async with env.factory() as s:
+            row = (await s.execute(sa_select(Character))).scalars().first()
+            await s.commit()
+        assert row.name == "Rem"
+        assert "Re:Zero" in row.identity_prompt and "accurate original" in row.identity_prompt
+        assert row.details_json and "Re:Zero" in row.details_json
+        char_id = row.id
+
+        # ---- numeric validation: bad age rejected, good accepted ---------
+        await env.app.handle_callback(env.cb(f"savec:{job_id}", update_id=6))
+        await env.app.handle_message(env.msg("Mina", update_id=8))
+        await env.app.handle_callback(env.cb("savec:p", update_id=7))
+        await env.app.handle_callback(env.cb("savec:t:age:10", update_id=9))
+        d = await env.memory.get(ADMIN_ID)
+        assert d["step"] == "trait:age"  # still on age — rejected (minor)
+        await env.app.handle_callback(env.cb("savec:t:age:25", update_id=10))
+        d = await env.memory.get(ADMIN_ID)
+        assert d["step"] == "trait:height"
+        await env.app.handle_callback(env.cb("savec:cust:height", update_id=11))
+        await env.app.handle_message(env.msg("170", update_id=12))  # free text
+        d = await env.memory.get(ADMIN_ID)
+        assert d["traits"]["height"] == "170"
+        # finish the remaining traits via free text (works for every trait)
+        for trait in ("hair_color", "hair_style", "eye_color", "skin", "face",
+                      "body_type", "body_proportions"):
+            d = await env.memory.get(ADMIN_ID)
+            if d.get("step", "").startswith("trait:"):
+                await env.app.handle_callback(
+                    env.cb(f"savec:cust:{trait}", update_id=20)
+                )
+                await env.app.handle_message(env.msg("v", update_id=21))
+        await env.app.handle_message(env.msg("Mina", update_id=30))
+        await env.app.handle_callback(env.cb("savec:ok", update_id=31))
+        async with env.factory() as s:
+            mina = (await s.execute(sa_select(Character).where(
+                Character.name == "Mina"))).scalars().first()
+            await s.commit()
+        assert mina.details_json and '"height": "170"' in mina.details_json
+
+        # ---- editc: corrections create a NEW version (history kept) ------
+        await env.app.handle_callback(env.cb(f"savec:editc:{char_id}", update_id=40))
+        assert any("ویرایش" in m[1] for m in env.gw.messages[-2:])  # editc_start
+        await env.app.handle_callback(env.cb("savec:cust:age", update_id=41))
+        await env.app.handle_message(env.msg("22", update_id=42))
+        for trait in ("height", "hair_color", "hair_style", "eye_color", "skin",
+                      "face", "body_type", "body_proportions"):
+            d = await env.memory.get(ADMIN_ID)
+            if d.get("step", "").startswith("trait:"):
+                await env.app.handle_callback(
+                    env.cb(f"savec:cust:{trait}", update_id=50)
+                )
+                await env.app.handle_message(env.msg("z", update_id=51))
+        await env.app.handle_callback(env.cb("savec:ok", update_id=60))
+        assert "نسخه 2" in env.gw.messages[-1][1]
+        async with env.factory() as s:
+            rows = (await s.execute(sa_select(Character).where(
+                Character.name == "Rem"))).scalars().all()
+            await s.commit()
+        by_ver = {r.version: r for r in rows}
+        assert not by_ver[1].is_active and by_ver[2].is_active
+        assert by_ver[2].parent_id == by_ver[1].id
+        assert '"age": "22"' in by_ver[2].details_json
+
+        # ---- generate wizard: scene text + character in prompt -----------
+        await env.app.handle_message(env.msg("/generate", update_id=70))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=71))
+        await env.app.handle_callback(env.cb("wiz:c:0", update_id=72))
+        await env.app.handle_message(env.msg("glowing blue eyes", update_id=73))
+        scene_msg = env.gw.messages[-1]
+        assert any(b[1] == "wiz:sk" for row in (scene_msg[2] or []) for b in row)
+        await env.app.handle_message(
+            env.msg("sitting on a rooftop, hoodie, sunset", update_id=74)
+        )
+        await env.app.handle_callback(env.cb("wiz:n:1", update_id=75))
+        await env.app.handle_callback(env.cb("wiz:y", update_id=76))
+        async with env.factory() as s:
+            job = (await s.execute(sa_select(Job).order_by(Job.id.desc()))).scalars().first()
+            await s.commit()
+        assert "sitting on a rooftop" in job.prompt_snapshot
+        assert "glowing blue eyes" in job.prompt_snapshot
+
+        # skip button: scene stays empty, wizard continues to count
+        await env.app.handle_message(env.msg("/generate", update_id=80))
+        await env.app.handle_callback(env.cb("wiz:s:anime", update_id=81))
+        await env.app.handle_callback(env.cb("wiz:c:-1", update_id=82))
+        await env.app.handle_callback(env.cb("wiz:sk", update_id=83))
+        d = await env.memory.get(ADMIN_ID)
+        assert d["step"] == "count" and d.get("scene") == ""
 
     _run(body())

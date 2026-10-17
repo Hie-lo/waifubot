@@ -35,10 +35,21 @@ def test_assemble_identity_canonical_order_and_face_anchors() -> None:
         "face": "oval",
     }
     out = assemble_identity(POOL, traits, extras="red dress", precise=True)
+    # Stage-2 professional order: age, height, face, eyes, skin, hair, body
     assert out == (
-        "25 years old, black ponytail hair, green eyes, "
-        "fair skin, oval face, red dress, detailed face, consistent facial features"
+        "25 years old, oval face, green eyes, fair skin, "
+        "black ponytail hair, red dress, detailed face, consistent facial features"
     )
+    # with a name + body traits the order is name, age, height, face ... body
+    named = assemble_identity(
+        POOL,
+        {"age": "25", "height": "165", "face": "oval", "eye_color": "green",
+         "skin": "fair", "hair_color": "black", "hair_style": "ponytail",
+         "body_type": "slim", "body_proportions": "average"},
+        extras="", precise=False, name="Sakura",
+    )
+    assert named.startswith("Sakura, 25 years old, 165cm tall, oval face")
+    assert "slim body" in named and "average" in named
     # free-hand identities never gain invented anchors (exact preservation)
     assert "consistent facial features" not in assemble_identity(POOL, traits)
 

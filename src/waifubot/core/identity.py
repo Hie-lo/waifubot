@@ -23,25 +23,57 @@ from typing import Any
 
 import yaml
 
-from waifubot.errors import ConfigError
+from waifubot.errors import ConfigError, ValidationError
 
+# Wizard order; rendering below uses its own professional (canonical) order.
 TRAIT_ORDER: tuple[str, ...] = (
     "age",
+    "height",
     "hair_color",
     "hair_style",
     "eye_color",
     "skin",
     "face",
+    "body_type",
+    "body_proportions",
 )
 
 _TRAIT_KEYS: dict[str, str] = {
     "age": "ages",
+    "height": "heights",
     "hair_color": "hair_colors",
     "hair_style": "hair_styles",
     "eye_color": "eye_colors",
     "skin": "skin_tones",
     "face": "face_shapes",
+    "body_type": "body_types",
+    "body_proportions": "body_proportions",
 }
+
+# numeric traits the user may type freely (validated, never invented)
+NUMERIC_TRAITS: dict[str, tuple[int, int, str]] = {
+    "age": (18, 100, "years old"),      # minor protection stays (18+)
+    "height": (100, 220, "cm"),
+}
+
+
+def validate_trait_value(trait: str, value: str) -> str:
+    """Validate one custom trait value. Numeric traits must be a whole number
+    inside their range; everything else must be short non-empty text."""
+    text = value.strip()
+    if not text:
+        raise ValidationError(f"{trait}: value must not be empty")
+    if trait in NUMERIC_TRAITS:
+        low, high, _unit = NUMERIC_TRAITS[trait]
+        if not text.isdigit():
+            raise ValidationError(f"{trait}: enter a whole number ({low}-{high})")
+        n = int(text)
+        if not low <= n <= high:
+            raise ValidationError(f"{trait}: number must be between {low} and {high}")
+        return str(n)
+    if len(text) > 200:
+        raise ValidationError(f"{trait}: value must be at most 200 characters")
+    return text
 
 
 @dataclass(frozen=True)
@@ -99,28 +131,50 @@ def assemble_identity(
     *,
     extras: str = "",
     precise: bool = False,
+    name: str = "",
 ) -> str:
-    """Build the identity prompt in canonical order. `traits` maps trait name ->
-    chosen value (already final English prompt fragments)."""
+    """Build the identity prompt in PROFESSIONAL canonical order (user 2026-10-16:
+    character records hold character details only, in a clean structure):
+    name, age, height, face, eyes, skin, hair, body, proportions, extras.
+    `traits` maps trait name -> final English prompt fragments."""
     parts: list[str] = [pool.prefix] if pool.prefix else []
+    if name.strip():
+        parts.append(name.strip())
     age = traits.get("age", "")
     if age:
         parts.append(f"{age} years old" if age.isdigit() else age)
-    hair_color = traits.get("hair_color", "")
-    hair_style = traits.get("hair_style", "")
-    if hair_color or hair_style:
-        parts.append(f"{hair_color} {hair_style} hair".strip())
+    height = traits.get("height", "")
+    if height:
+        parts.append(f"{height}cm tall" if height.isdigit() else height)
+    if traits.get("face"):
+        parts.append(f"{traits['face']} face")
     if traits.get("eye_color"):
         parts.append(f"{traits['eye_color']} eyes")
     if traits.get("skin"):
         parts.append(f"{traits['skin']} skin")
-    if traits.get("face"):
-        parts.append(f"{traits['face']} face")
+    hair_color = traits.get("hair_color", "")
+    hair_style = traits.get("hair_style", "")
+    if hair_color or hair_style:
+        parts.append(f"{hair_color} {hair_style} hair".strip())
+    if traits.get("body_type"):
+        parts.append(f"{traits['body_type']} body")
+    if traits.get("body_proportions"):
+        parts.append(traits["body_proportions"])
     if extras.strip():
         parts.append(extras.strip().strip(","))
     if precise and pool.face_anchors:
         parts.append(pool.face_anchors)
     return ", ".join(p for p in parts if p)
+
+
+def known_character_prompt(name: str, anime: str, pool: IdentityPool) -> str:
+    """A recognized character (from an anime/game): name + source anchor the
+    model to the real design; Stage 3's AI button adds fine details."""
+    parts = [f"{name.strip()} (from {anime.strip()})",
+             "accurate original character design"]
+    if pool.face_anchors:
+        parts.append(pool.face_anchors)
+    return ", ".join(parts)
 
 
 def random_identity(

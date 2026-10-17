@@ -33,7 +33,9 @@ from waifubot.core.identity import (
     IdentityPool,
     assemble_identity,
     extract_traits,
+    known_character_prompt,
     random_identity,
+    validate_trait_value,
 )
 from waifubot.core.prompt_builder import PromptBuilder
 from waifubot.db.models import Character, Image, Job, Post
@@ -690,6 +692,7 @@ class BotApp:
         await self._safe_answer(inb)
         buttons: Buttons = [
             [(self._msgs.t("char_generate"), f"usechar:{char_id}")],
+            [(self._msgs.t("editc_button"), f"savec:editc:{char_id}")],
             [(self._msgs.t("view_back"), "menu:characters"),
              (self._msgs.t("menu_back"), "menu:back")],
         ]
@@ -711,7 +714,7 @@ class BotApp:
             return
         await self._memory.set(
             inb.user_id,
-            {"kind": "generate", "step": "count", "style_key": "",
+            {"kind": "generate", "step": "scene", "style_key": "",
              "character_id": char_id},
         )
         await self._safe_answer(inb)
@@ -719,7 +722,7 @@ class BotApp:
             inb.chat_id,
             self._msgs.t("char_using", name=row.name),
         )
-        await self._ask_count(inb)
+        await self._ask_scene(inb)
 
     # ---- wizard -----------------------------------------------------------
     async def _cb_wizard(self, inb: Inbound, data: str) -> None:
@@ -745,10 +748,10 @@ class BotApp:
             if char_id == -1:  # random everything (SPEC: unchosen = random)
                 dialog["character_id"] = None
                 dialog["identity"] = ""
-                dialog["step"] = "count"
+                dialog["step"] = "scene"
                 await self._memory.set(inb.user_id, dialog)
                 await self._safe_answer(inb)
-                await self._ask_count(inb)
+                await self._ask_scene(inb)
             elif char_id == 0:
                 dialog["character_id"] = None
                 dialog["step"] = "identity"
@@ -757,10 +760,16 @@ class BotApp:
                 await self._gw.send_message(inb.chat_id, self._msgs.t("wiz_identity_ask"))
             else:
                 dialog["character_id"] = char_id
-                dialog["step"] = "count"
+                dialog["step"] = "scene"
                 await self._memory.set(inb.user_id, dialog)
                 await self._safe_answer(inb)
-                await self._ask_count(inb)
+                await self._ask_scene(inb)
+        elif part == "sk":  # skip the optional scene prompt
+            dialog["scene"] = ""
+            dialog["step"] = "count"
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._ask_count(inb)
         elif part == "n":
             raw = data.split(":")[2]
             dialog["count"] = 0 if raw == "rnd" else int(raw)
@@ -791,6 +800,14 @@ class BotApp:
         )
 
     SITE_COUNTS = (2, 4, 6, 8, 16)  # the site produces 2/4/6/8/16/32 (32 > hard max)
+
+    async def _ask_scene(self, inb: Inbound) -> None:
+        """Optional user scene prompt (pose/expression/clothes/activity/background)
+        — combined with the character details at confirm (user 2026-10-16)."""
+        buttons: Buttons = [[(self._msgs.t("wiz_skip"), "wiz:sk")]]
+        await self._gw.send_message(
+            inb.chat_id, self._msgs.t("wiz_scene_ask"), buttons=buttons
+        )
 
     async def _ask_count(self, inb: Inbound) -> None:
         # User 2026-10-16: ALL site options (2/4/6/8/16) are always offered;
@@ -868,6 +885,7 @@ class BotApp:
                     style_lock=style_lock,
                     count=min(count, max_images),
                     style_value=style_value,
+                    admin_text=dialog.get("scene") or "",
                     idempotency_key=f"tg:{inb.update_id}",
                     requested_by=f"tg:{inb.user_id}",
                     max_images_per_job=max_images,
@@ -892,10 +910,15 @@ class BotApp:
             return
         if kind == "generate" and dialog.get("step") == "identity":
             dialog["identity"] = text
+            dialog["step"] = "scene"
+            await self._memory.set(inb.user_id, dialog)
+            await self._ask_scene(inb)
+        elif kind == "generate" and dialog.get("step") == "scene":
+            dialog["scene"] = text[:500]
             dialog["step"] = "count"
             await self._memory.set(inb.user_id, dialog)
             await self._ask_count(inb)
-        elif kind == "savec":
+        elif kind in ("savec", "editc"):
             await self._savec_input(inb, dialog, text)
         elif kind == "set":
             await self._set_input(inb, dialog, text)
@@ -940,6 +963,31 @@ class BotApp:
         parts = data.split(":")
         action = parts[1]
         dialog = await self._memory.get(inb.user_id)
+        if action == "editc":  # savec:editc:<id> — works from the menu too
+            char_id = int(parts[2])
+            async with self._sessions() as s:
+                row = await s.get(Character, char_id)
+                await s.commit()
+            if row is None or not row.is_active:
+                await self._safe_answer(inb, self._msgs.t("wiz_stale"))
+                return
+            details = json.loads(row.details_json or "{}")
+            traits = dict(details.get("traits") or extract_traits(
+                self._idpool, row.identity_prompt
+            ))
+            first = self._first_missing_trait(traits)
+            await self._memory.set(inb.user_id, {
+                "kind": "editc", "mode": "editc", "orig_name": row.name,
+                "name": row.name, "precise": True,
+                "traits": traits, "extras": details.get("extras") or "",
+                "step": f"trait:{first}",
+            })
+            await self._safe_answer(inb)
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("editc_start", name=row.name)
+            )
+            await self._ask_trait(inb, {"traits": traits}, first)
+            return
         if action.isdigit():
             job_id = int(action)
             async with self._sessions() as s:
@@ -956,7 +1004,7 @@ class BotApp:
             )
             await self._gw.send_message(inb.chat_id, self._msgs.t("savec_name_ask"))
             return
-        if not dialog or dialog.get("kind") != "savec":
+        if not dialog or dialog.get("kind") not in ("savec", "editc"):
             await self._safe_answer(inb, self._msgs.t("wiz_stale"))
             return
         if action == "p":  # precise prompt builder (user request 2026-10-16)
@@ -968,6 +1016,15 @@ class BotApp:
             await self._memory.set(inb.user_id, dialog)
             await self._safe_answer(inb)
             await self._ask_trait(inb, dialog, TRAIT_ORDER[0])
+        elif action == "k":  # known character: name + anime, that's it
+            dialog["precise"] = True
+            dialog["mode"] = "known"
+            dialog["step"] = "known_name"
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("savec_known_name_ask")
+            )
         elif action == "j":  # keep this generation's identity, exactly
             dialog["precise"] = False
             await self._memory.set(inb.user_id, dialog)
@@ -981,6 +1038,17 @@ class BotApp:
             await self._gw.send_message(inb.chat_id, self._msgs.t("savec_identity_ask"))
         elif action == "t":  # savec:t:<trait>:<value>
             trait, value = parts[2], ":".join(parts[3:])
+            try:
+                value = validate_trait_value(trait, value)
+            except ValidationError as e:
+                # stay on the same trait so the user can pick again
+                dialog["step"] = f"trait:{trait}"
+                await self._memory.set(inb.user_id, dialog)
+                await self._safe_answer(
+                    inb, self._msgs.t("savec_bad_value", error=str(e))
+                )
+                await self._ask_trait(inb, dialog, trait)
+                return
             dialog.setdefault("traits", {})[trait] = value
             nxt = self._next_trait(dialog)
             if nxt is None:
@@ -1012,6 +1080,14 @@ class BotApp:
             dialog.setdefault("extras", "")
             await self._safe_answer(inb)
             await self._savec_review(inb, dialog)
+        elif action == "cust":  # free text for this trait instead of buttons
+            trait = parts[2]
+            dialog["step"] = f"trait_custom:{trait}"
+            await self._memory.set(inb.user_id, dialog)
+            await self._safe_answer(inb)
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("savec_custom_ask")
+            )
         elif action == "ok":
             await self._safe_answer(inb)
             await self._savec_commit(inb, dialog)
@@ -1023,6 +1099,12 @@ class BotApp:
                 return trait
         return None
 
+    def _first_missing_trait(self, traits: dict) -> str:
+        for trait in TRAIT_ORDER:
+            if trait not in traits:
+                return trait
+        return TRAIT_ORDER[-1]
+
     async def _ask_trait(self, inb: Inbound, dialog: dict, trait: str) -> None:
         lang = self._msgs.lang
         rows = [
@@ -1030,6 +1112,7 @@ class BotApp:
             for tv in self._idpool.values(trait)
         ]
         rows.append((self._msgs.t("savec_random_pick"), f"savec:tr:{trait}"))
+        rows.append((self._msgs.t("savec_custom"), f"savec:cust:{trait}"))
         await self._gw.send_message(
             inb.chat_id,
             self._msgs.t("savec_trait_ask", trait=self._msgs.t(f"trait_{trait}")),
@@ -1043,12 +1126,19 @@ class BotApp:
         )
 
     async def _savec_review(self, inb: Inbound, dialog: dict) -> None:
-        if dialog.get("precise"):
+        if dialog.get("mode") == "known":
+            dialog["final_identity"] = known_character_prompt(
+                dialog.get("known_name") or "",
+                dialog.get("known_anime") or "",
+                self._idpool,
+            )
+        elif dialog.get("precise"):
             dialog["final_identity"] = assemble_identity(
                 self._idpool,
                 dialog.get("traits") or {},
                 extras=dialog.get("extras") or "",
                 precise=True,
+                name=dialog.get("name") or "",
             )
         else:
             dialog["final_identity"] = (dialog.get("identity") or "").strip()
@@ -1066,6 +1156,23 @@ class BotApp:
 
     async def _savec_commit(self, inb: Inbound, dialog: dict) -> None:
         identity = (dialog.get("final_identity") or "").strip()
+        if not identity:  # OK can be pressed before the review screen
+            if dialog.get("mode") == "known":
+                identity = known_character_prompt(
+                    dialog.get("known_name") or "",
+                    dialog.get("known_anime") or "",
+                    self._idpool,
+                )
+            elif dialog.get("precise"):
+                identity = assemble_identity(
+                    self._idpool,
+                    dialog.get("traits") or {},
+                    extras=dialog.get("extras") or "",
+                    precise=True,
+                    name=dialog.get("name") or "",
+                )
+            else:
+                identity = (dialog.get("identity") or "").strip()
         try:
             validate_adult_identity(identity, self._cfg.blocklist)
         except ValidationError as e:
@@ -1074,18 +1181,36 @@ class BotApp:
             )
             return
         name = dialog.get("name") or "unnamed"
+        details = {
+            "mode": dialog.get("mode") or ("precise" if dialog.get("precise") else "manual"),
+            "traits": dialog.get("traits") or {},
+            "extras": dialog.get("extras") or "",
+            "known_name": dialog.get("known_name") or "",
+            "known_anime": dialog.get("known_anime") or "",
+        }
         async with self._sessions() as s:
-            prev = (
-                await s.execute(
-                    select(Character).where(Character.name == name)
-                    .order_by(Character.version.desc()).limit(1)
-                )
-            ).scalars().first()
+            if dialog.get("mode") == "editc":
+                # edit = a NEW version of the same character (history is kept)
+                name = dialog.get("orig_name") or name
+                prev = (
+                    await s.execute(
+                        select(Character).where(Character.name == name)
+                        .order_by(Character.version.desc()).limit(1)
+                    )
+                ).scalars().first()
+            else:
+                prev = (
+                    await s.execute(
+                        select(Character).where(Character.name == name)
+                        .order_by(Character.version.desc()).limit(1)
+                    )
+                ).scalars().first()
             if prev is not None:
                 prev.is_active = False
             row = Character(
                 name=name,
                 identity_prompt=identity,
+                details_json=json.dumps(details, ensure_ascii=False),
                 style_lock=await self._settings.get("style_lock"),
                 version=(prev.version + 1) if prev else 1,
                 parent_id=prev.id if prev else None,
@@ -1148,6 +1273,7 @@ class BotApp:
             await self._memory.set(inb.user_id, dialog)
             buttons: Buttons = [
                 [(self._msgs.t("savec_build_precise"), "savec:p")],
+                [(self._msgs.t("savec_known"), "savec:k")],
                 [(self._msgs.t("savec_use_job"), "savec:j"),
                  (self._msgs.t("savec_write_own"), "savec:m")],
             ]
@@ -1157,6 +1283,40 @@ class BotApp:
             return
         if step == "trait_extras":
             dialog["extras"] = text[:200]
+            await self._savec_review(inb, dialog)
+            return
+        if step and step.startswith("trait_custom:"):
+            trait = step.split(":", 1)[1]
+            try:
+                value = validate_trait_value(trait, text)
+            except ValidationError as e:
+                await self._gw.send_message(
+                    inb.chat_id, self._msgs.t("savec_bad_value", error=str(e))
+                )
+                return
+            dialog.setdefault("traits", {})[trait] = value
+            nxt = self._next_trait(dialog)
+            if nxt is None:
+                dialog["step"] = "trait_extras"
+                await self._memory.set(inb.user_id, dialog)
+                await self._ask_extras(inb)
+            else:
+                dialog["step"] = f"trait:{nxt}"
+                await self._memory.set(inb.user_id, dialog)
+                await self._ask_trait(inb, dialog, nxt)
+            return
+        if step == "known_name":
+            dialog["known_name"] = text[:100]
+            dialog["name"] = text[:100]  # the character's real name
+            dialog["step"] = "known_anime"
+            await self._memory.set(inb.user_id, dialog)
+            await self._gw.send_message(
+                inb.chat_id, self._msgs.t("savec_known_anime_ask")
+            )
+            return
+        if step == "known_anime":
+            dialog["known_anime"] = text[:100]
+            await self._memory.set(inb.user_id, dialog)
             await self._savec_review(inb, dialog)
             return
         if step == "identity":  # manual path: text now, review before saving

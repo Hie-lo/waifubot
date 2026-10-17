@@ -37,6 +37,9 @@ class Character(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     identity_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # structured traits (age/height/hair/.../body) for edit + prompt combining
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     style_lock: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     parent_id: Mapped[int | None] = mapped_column(
