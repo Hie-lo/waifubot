@@ -136,6 +136,8 @@ REQUIRED_KEYS: tuple[str, ...] = (
     "ai_apply",
     "ai_undo",
     "ai_error",
+    "kb_ready",
+    "kb_placeholder",
     "pool_empty",
     "pool_item",
     "publish_pick",

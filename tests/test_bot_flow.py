@@ -917,3 +917,59 @@ def test_stage3_ai_enhance_buttons(env: Env) -> None:
         assert "wiz:ai" not in labels  # hidden when disabled
 
     _run(body())
+
+
+def test_stage4_bottom_reply_keyboard(env: Env) -> None:
+    """Stage 4 (user 2026-10-16): the main buttons live in a persistent
+    bottom Reply Keyboard; pressing a label navigates like the inline menu
+    (and abandons any open dialog)."""
+
+    async def body() -> None:
+        # /menu installs the bottom keyboard (2-column, stable order)
+        await env.app.handle_message(env.msg("/menu", update_id=1))
+        assert env.gw.reply_keyboards, "reply keyboard must be shown"
+        _chat, _text, rows, placeholder = env.gw.reply_keyboards[-1]
+        labels = [lab for row in rows for lab in row]
+        assert len(labels) == 8 and all(len(row) == 2 for row in rows)
+        for key in ("generate", "inbox", "queue", "pool",
+                    "characters", "publish", "settings", "help"):
+            assert any(lab.startswith({"generate": "🎨", "inbox": "📥",
+                                       "queue": "⏳", "pool": "🗂",
+                                       "characters": "👤", "publish": "📤",
+                                       "settings": "⚙️", "help": "❓"}[key])
+                       for lab in labels), key
+        assert placeholder  # input-field placeholder is set
+        # pause/resume are contextual inline actions, not permanent keyboard rows
+        assert not any("⏸" in lab or "▶️" in lab for lab in labels)
+        # the inline menu is still the LAST message (viewers/tests depend on it)
+        last = env.gw.messages[-1]
+        assert any("ساخت" in b[0] for row in (last[2] or []) for b in row)
+
+        # pressing a keyboard label as TEXT navigates to that section
+        await env.app.handle_message(env.msg("👤 شخصیت‌ها", update_id=2))
+        after = env.gw.messages[-1][1]
+        assert "شخصیت" in after  # the characters screen
+
+        # the home label returns to the menu
+        await env.app.handle_message(env.msg("🏠 منوی اصلی", update_id=3))
+        assert env.gw.reply_keyboards  # keyboard re-installed on menu
+        last = env.gw.messages[-1]
+        assert any("ساخت" in b[0] for row in (last[2] or []) for b in row)
+
+        # a main-nav press abandons any open dialog and navigates
+        await env.app.handle_message(env.msg("/generate", update_id=4))
+        assert (await env.memory.get(ADMIN_ID)) is not None  # wizard open
+        await env.app.handle_message(env.msg("⏳ صف", update_id=5))
+        assert (await env.memory.get(ADMIN_ID)) is None  # dialog gone
+        assert "صف" in env.gw.messages[-1][1] or any(
+            "صف" in m[1] for m in env.gw.messages[-3:]
+        )  # the queue screen
+
+        # free text that is NOT a label still feeds the dialog as before
+        await env.app.handle_message(env.msg("/generate", update_id=6))
+        await env.app.handle_callback(env.cb("wiz:c:0", update_id=7))
+        await env.app.handle_message(env.msg("purple hair", update_id=8))
+        d = await env.memory.get(ADMIN_ID)
+        assert d is not None and d["identity"] == "purple hair"
+
+    _run(body())

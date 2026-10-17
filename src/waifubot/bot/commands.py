@@ -105,6 +105,14 @@ class BotApp:
         if text.startswith("/"):
             await self._command(inb, text.split()[0].split("@")[0].lower())
             return
+        # Stage 4: the bottom reply keyboard sends labels as text — route
+        # them like the inline menu. A main-nav press always navigates (and
+        # abandons any open dialog, like every modern bot).
+        nav_cmd = self._main_label_map().get(text)
+        if nav_cmd is not None:
+            await self._memory.clear(inb.user_id)
+            await self._command(inb, nav_cmd)
+            return
         dialog = await self._memory.get(inb.user_id)
         if dialog:
             await self._dialog_input(inb, dialog)
@@ -1358,6 +1366,23 @@ class BotApp:
         "help": "/help",
     }
 
+    def _main_kb_rows(self) -> list[list[str]]:
+        """The persistent bottom keyboard: 2 columns, stable order."""
+        order = (
+            "generate", "inbox", "queue", "pool",
+            "characters", "publish", "settings", "help",
+        )
+        labels = [self._msgs.t(f"menu_{key}") for key in order]
+        return [labels[i:i + 2] for i in range(0, len(labels), 2)]
+
+    def _main_label_map(self) -> dict[str, str]:
+        """Reply-keyboard label -> command (same map as the inline menu)."""
+        mapping = {
+            self._msgs.t(f"menu_{key}"): cmd for key, cmd in self.MENU_MAP.items()
+        }
+        mapping[self._msgs.t("menu_back")] = "/menu"
+        return mapping
+
     async def _cmd_menu(self, inb: Inbound) -> None:
         rows = [
             (self._msgs.t(f"menu_{key}"), f"menu:{key}")
@@ -1372,6 +1397,14 @@ class BotApp:
             rows.append((self._msgs.t("menu_resume"), "menu:resume"))
         elif busy:
             rows.append((self._msgs.t("menu_pause"), "menu:pause"))
+        # the modern bottom keyboard (Stage 4) — kept BELOW the inline menu
+        # so the inline menu stays the last message for the tests/viewers
+        await self._gw.send_reply_keyboard(
+            inb.chat_id,
+            self._msgs.t("kb_ready"),
+            self._main_kb_rows(),
+            placeholder=self._msgs.t("kb_placeholder"),
+        )
         await self._gw.send_message(
             inb.chat_id, self._msgs.t("menu_title"), buttons=_chunk(rows)
         )

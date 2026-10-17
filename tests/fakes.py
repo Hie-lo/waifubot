@@ -5,6 +5,7 @@ from __future__ import annotations
 class FakeGateway:
     def __init__(self) -> None:
         self.messages: list[tuple] = []
+        self.reply_keyboards: list[tuple] = []
         self.photos: list[tuple] = []
         self.documents: list[tuple] = []
         self.answers: list[tuple] = []
@@ -23,6 +24,11 @@ class FakeGateway:
         self._maybe_fail()
         self.messages.append((chat_id, text, buttons))
         return len(self.messages)
+
+    async def send_reply_keyboard(self, chat_id, text, rows, placeholder=""):  # noqa: ANN001
+        self._maybe_fail()
+        self.reply_keyboards.append((chat_id, text, rows, placeholder))
+        return len(self.reply_keyboards)
 
     async def send_photo(self, chat_id, photo_path, caption="", spoiler=False,  # noqa: ANN001
                          buttons=None) -> int:

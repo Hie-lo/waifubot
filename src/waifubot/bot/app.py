@@ -17,7 +17,13 @@ import re
 import sys
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.error import InvalidToken, NetworkError
 from telegram.ext import (
     Application,
@@ -76,6 +82,24 @@ class PTBGateway:
     ) -> int:
         msg = await self._require().send_message(
             chat_id=chat_id, text=text, reply_markup=_markup(buttons)
+        )
+        return msg.message_id
+
+    async def send_reply_keyboard(
+        self,
+        chat_id: int | str,
+        text: str,
+        rows: list[list[str]],
+        placeholder: str = "",
+    ) -> int:
+        markup = ReplyKeyboardMarkup(
+            [[KeyboardButton(label) for label in row] for row in rows],
+            resize_keyboard=True,
+            is_persistent=True,
+            input_field_placeholder=placeholder or None,
+        )
+        msg = await self._require().send_message(
+            chat_id=chat_id, text=text, reply_markup=markup
         )
         return msg.message_id
 

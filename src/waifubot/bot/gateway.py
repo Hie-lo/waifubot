@@ -21,6 +21,20 @@ class TelegramGateway(Protocol):
         """Send a text message; returns its message_id."""
         ...
 
+    async def send_reply_keyboard(
+        self,
+        chat_id: int | str,
+        text: str,
+        rows: list[list[str]],
+        placeholder: str = "",
+    ) -> int:
+        """Show/update the persistent bottom reply keyboard (Stage 4).
+
+        `rows` are plain label rows (no callbacks — Telegram sends the label
+        back as a text message, which BotApp routes like the inline menu).
+        Returns the message_id of the message carrying the keyboard."""
+        ...
+
     async def send_photo(
         self,
         chat_id: int | str,
