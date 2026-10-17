@@ -98,3 +98,16 @@ class ChannelProbe(Protocol):
     ) -> str | None: ...
 
     async def get_bot_rights(self, chat_ref: str | int) -> dict[str, bool]: ...
+
+
+class ChallengeTimeoutError(Exception):
+    """Raised when waiting for human challenge resolution exceeds timeout (R28)."""
+
+
+class ChallengeGate(Protocol):
+    """Port for serializing human challenge interactions (R28)."""
+
+    def acquire_challenge(
+        self, wait_timeout_seconds: float = 180.0
+    ) -> AsyncIterator[None]: ...
+

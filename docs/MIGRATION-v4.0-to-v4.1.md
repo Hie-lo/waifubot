@@ -40,12 +40,12 @@ Real test: `python -m pytest tests/unit/test_claiming.py tests/unit/test_reaper.
 
 ## Stage 4 — Concurrent execution (R34, R35, R28)
 
-- [ ] `core/ports.py`: `ProviderSlotPool` (+ fake and mock implementation)
-- [ ] `adapters/browser/pool.py`: one Chromium, N isolated contexts, storage-state reuse; Perchance adapter takes a slot instead of owning a page
-- [ ] `services/workers.py`: `WorkerPool` (TaskGroup), job semaphore, live resize from settings cache
-- [ ] `services/resources.py`: `MemoryGuard` (soft), `ChallengeGate` (one window at a time, `challenge_wait_seconds`)
-- [ ] Settings registry: `worker_count`, `max_concurrent_jobs`, `max_browser_contexts`, `provider_concurrency`, `fair_claim`, `min_free_ram_mb`, `challenge_wait_seconds` + panel buttons
-- [ ] R10 (per-job slot + snapshot + hash dedupe) verified under concurrency
+- [x] `core/ports.py`: `ProviderSlotPool` (+ fake and mock implementation)
+- [x] `adapters/browser/pool.py`: one Chromium, N isolated contexts, storage-state reuse; Perchance adapter takes a slot instead of owning a page
+- [x] `services/workers.py`: `WorkerPool` (TaskGroup), job semaphore, live resize from settings cache
+- [x] `services/resources.py`: `MemoryGuard` (soft), `ChallengeGate` (one window at a time, `challenge_wait_seconds`)
+- [x] Settings registry: `worker_count`, `max_concurrent_jobs`, `max_browser_contexts`, `provider_concurrency`, `fair_claim`, `min_free_ram_mb`, `challenge_wait_seconds` + panel buttons
+- [x] R10 (per-job slot + snapshot + hash dedupe) verified under concurrency
 
 Real test: `python -m pytest tests/unit/test_worker_pool.py tests/unit/test_slot_pool.py tests/unit/test_perchance_adapter.py -q`
 Manual measurement (no live provider in CI): run the mock provider with 1/2/3/4 slots and record RAM per slot; write the numbers into the starting defaults.
