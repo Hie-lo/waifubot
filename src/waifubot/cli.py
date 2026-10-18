@@ -86,6 +86,14 @@ def cli_health(args: argparse.Namespace) -> int:
         return 1
 
 
+def cli_run(args: argparse.Namespace) -> int:
+    """CLI subcommand handler for `waifubot run`."""
+    from waifubot.bot.app import run_bot
+
+    run_bot()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(prog="waifubot", description="WaifuBot management CLI")
@@ -96,6 +104,10 @@ def main(argv: list[str] | None = None) -> int:
         "health", help="Runs system diagnostics and health checks"
     )
     health_parser.set_defaults(func=cli_health)
+
+    # run subcommand
+    run_parser = subparsers.add_parser("run", help="Starts the WaifuBot Telegram bot")
+    run_parser.set_defaults(func=cli_run)
 
     args = parser.parse_args(argv)
 

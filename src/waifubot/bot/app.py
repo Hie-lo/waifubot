@@ -83,3 +83,27 @@ def create_app(
         enhancer=resolved_enhancer,
         chat_model=resolved_chat_model,
     )
+
+
+def run_bot() -> None:
+    """Entrypoint to launch the Telegram bot polling loop."""
+    import os
+    import sys
+
+    from telegram.ext import ApplicationBuilder
+
+    token = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token or token in ("mock-token", "your_bot_token_here"):
+        print(
+            "ERROR: BOT_TOKEN is not configured in .env. Please set a valid Telegram bot token.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print("Starting WaifuBot Telegram bot...")
+    application = ApplicationBuilder().token(token).build()
+    application.run_polling()
+
+
+if __name__ == "__main__":
+    run_bot()
