@@ -47,6 +47,19 @@ class TestBotFlow(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(accepted)
         self.assertIn("فقط با انتخاب دکمه‌ها", msg)
 
+        # 3b. Verify character pagination unpacking and page 1 rendering
+        from waifubot.bot.callbacks import StudioCharCallback
+
+        cb_next = StudioCharCallback.unpack("-1:1")
+        self.assertEqual(cb_next.char_index, -1)
+        self.assertEqual(cb_next.page, 1)
+
+        page1_text, page1_kb = handler.render_studio_panel(state, char_page=1)
+        self.assertIn("صفحه 2 از", page1_text)
+        page1_button_texts = [b["text"] for row in page1_kb for b in row]
+        self.assertNotIn("Toki", page1_button_texts)
+        self.assertIsNone(state.selected_character)
+
         # 4. Select character (Toki)
         state = handler.select_character(state, index=0)
         self.assertEqual(state.selected_character, "Toki")

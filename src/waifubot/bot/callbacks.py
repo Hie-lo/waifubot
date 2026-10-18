@@ -107,7 +107,8 @@ class StudioCharCallback(CallbackData):
     @classmethod
     def unpack(cls, payload: str) -> "StudioCharCallback":
         parts = payload.split(":")
-        idx = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+        raw_idx = parts[0] if len(parts) > 0 else "0"
+        idx = int(raw_idx) if raw_idx.lstrip("-").isdigit() else 0
         pg = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
         return cls(char_index=idx, page=pg)
 

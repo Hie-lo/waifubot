@@ -205,12 +205,13 @@ class SpecialCharacterStudioHandler:
         # 2. Main screen: character select OR categories selection
         if state.step == "character_select" or not state.selected_character:
             chars = self.characters
+            total_pages = max(1, (len(chars) + page_size - 1) // page_size)
             start_idx = char_page * page_size
             end_idx = min(start_idx + page_size, len(chars))
 
             lines = [
                 f"🎭 {bold('استودیوی کاراکترهای ویژه (Vision Lab)')}",
-                "لطفاً یک کاراکتر را برای شروع انتخاب کنید:",
+                f"لطفاً یک کاراکتر را برای شروع انتخاب کنید (صفحه {char_page + 1} از {total_pages}):",
             ]
             text = "\n".join(lines)
             keyboard = []
@@ -237,6 +238,12 @@ class SpecialCharacterStudioHandler:
                         ).pack(),
                     }
                 )
+            nav_row.append(
+                {
+                    "text": f"📄 {char_page + 1}/{total_pages}",
+                    "callback_data": StudioCharCallback(char_index=-1, page=char_page).pack(),
+                }
+            )
             if end_idx < len(chars):
                 nav_row.append(
                     {
