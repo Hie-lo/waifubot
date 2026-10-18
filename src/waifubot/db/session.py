@@ -41,6 +41,18 @@ def create_engine_and_sessionmaker(
     echo: bool = False,
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     """Builds the AsyncEngine and sessionmaker with configured pragmas."""
+    if "sqlite" in database_url:
+        from pathlib import Path
+
+        from sqlalchemy.engine import make_url
+
+        try:
+            parsed = make_url(database_url)
+            if parsed.database and parsed.database != ":memory:":
+                Path(parsed.database).parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
     engine = create_async_engine(database_url, echo=echo)
     if "sqlite" in database_url:
         configure_sqlite_pragmas(engine)

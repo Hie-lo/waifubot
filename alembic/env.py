@@ -1,8 +1,10 @@
 import asyncio
+import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import pool
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import waifubot.db.models  # noqa: F401
@@ -15,6 +17,21 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+# Support DATABASE_URL or DB_URL environment variable override
+env_db_url = os.environ.get("DATABASE_URL") or os.environ.get("DB_URL")
+if env_db_url:
+    config.set_main_option("sqlalchemy.url", env_db_url)
+
+# Ensure parent directory exists for SQLite database files
+configured_url = config.get_main_option("sqlalchemy.url")
+if configured_url:
+    try:
+        parsed = make_url(configured_url)
+        if "sqlite" in parsed.drivername and parsed.database and parsed.database != ":memory:":
+            Path(parsed.database).parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
 
 def run_migrations_offline() -> None:

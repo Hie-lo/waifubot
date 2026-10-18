@@ -100,6 +100,19 @@ class TestAlembicMigrations(unittest.TestCase):
             self.assertIn("free", plan_ids)
             self.assertIn("staff", plan_ids)
 
+    def test_auto_create_nonexistent_parent_directory(self) -> None:
+        """Alembic automatically creates missing parent directories for SQLite files."""
+        deep_dir = os.path.join(self.temp_dir, "nested", "storage", "folder")
+        deep_db = os.path.join(deep_dir, "test.db")
+        self.assertFalse(os.path.exists(deep_dir))
+
+        cfg = Config("alembic.ini")
+        cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{deep_db}")
+        command.upgrade(cfg, "head")
+
+        self.assertTrue(os.path.exists(deep_dir))
+        self.assertTrue(os.path.exists(deep_db))
+
 
 if __name__ == "__main__":
     unittest.main()
