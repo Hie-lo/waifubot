@@ -274,9 +274,9 @@ def build_bot_app(
 
     async def on_post_init(app: Application) -> None:
         await init_db(engine)
-        if admin_ids:
+        if resolved_admin_ids:
             async with session_factory() as session:
-                await seed_admins(session, admin_ids)
+                await seed_admins(session, resolved_admin_ids)
                 await session.commit()
 
         restart_ctrl = RestartController()
@@ -290,7 +290,7 @@ def build_bot_app(
                 )
             restart_ctrl.clear_restart_pending()
 
-    application = ApplicationBuilder().token(token).post_init(on_post_init).build()
+    application = ApplicationBuilder().token(resolved_token).post_init(on_post_init).build()
     application.bot_data["session_factory"] = session_factory
 
     gateway = TelegramGatewayAdapter(application.bot)

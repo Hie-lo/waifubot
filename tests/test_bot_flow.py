@@ -215,6 +215,23 @@ class TestBotFlow(unittest.IsolatedAsyncioTestCase):
         commands = {list(h.commands)[0] for h in command_handlers if h.commands}
         self.assertTrue({"start", "status", "endchat"}.issubset(commands))
 
+    def test_build_bot_app_from_environment(self) -> None:
+        """Verify build_bot_app correctly reads BOT_TOKEN from environment when called with no args."""
+        import os
+        from unittest.mock import patch
+
+        from waifubot.bot.app import build_bot_app
+
+        env_patch = {
+            "BOT_TOKEN": "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ123456789",
+            "DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+            "ADMIN_USER_IDS": "2001,2002",
+        }
+        with patch.dict(os.environ, env_patch):
+            app = build_bot_app()
+            self.assertIsNotNone(app)
+            self.assertIn("session_factory", app.bot_data)
+
 
 if __name__ == "__main__":
     unittest.main()
