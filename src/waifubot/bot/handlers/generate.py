@@ -315,6 +315,16 @@ class SpecialCharacterStudioHandler:
             )
         keyboard.append(row_cnt)
 
+        # AI prompt enhance button
+        keyboard.append(
+            [
+                {
+                    "text": "✨ بهبود پرامپت با هوش مصنوعی",
+                    "callback_data": GenActionCallback(action="enhance").pack(),
+                }
+            ]
+        )
+
         # Action buttons
         keyboard.append(
             [
@@ -375,9 +385,16 @@ class SpecialCharacterStudioHandler:
                 f"✍️ {bold('تبدیل متن به تصویر (Text to Image)')}\n\n"
                 "لطفاً متن یا پرامپت توصیفی تصویر مورد نظرتان را تایپ و ارسال کنید:\n"
                 f"<i>(می‌توانید فارسی یا انگلیسی بنویسید)</i>\n\n"
+                "همچنین می‌توانید از دکمه زیر برای انتخاب یکی از کاراکترهای ذخیره‌شده‌تان استفاده کنید.\n\n"
                 "برای لغو می‌توانید دستور /cancel را ارسال کنید."
             )
             keyboard = [
+                [
+                    {
+                        "text": "👤 انتخاب از کاراکترهای من",
+                        "callback_data": GenActionCallback(action="pick_saved_char").pack(),
+                    }
+                ],
                 [
                     {
                         "text": "🔙 بازگشت به انتخاب حالت",
@@ -387,7 +404,7 @@ class SpecialCharacterStudioHandler:
                         "text": "❌ انصراف",
                         "callback_data": NavCallback(action="close").pack(),
                     },
-                ]
+                ],
             ]
             return text, keyboard
 
@@ -416,6 +433,20 @@ class SpecialCharacterStudioHandler:
             )
         keyboard.append(row_cnt)
 
+        # AI prompt enhance & saved character buttons
+        keyboard.append(
+            [
+                {
+                    "text": "✨ بهبود پرامپت با هوش مصنوعی",
+                    "callback_data": GenActionCallback(action="enhance").pack(),
+                },
+                {
+                    "text": "👤 انتخاب کاراکتر",
+                    "callback_data": GenActionCallback(action="pick_saved_char").pack(),
+                },
+            ]
+        )
+
         # Action buttons
         keyboard.append(
             [
@@ -430,7 +461,102 @@ class SpecialCharacterStudioHandler:
             ]
         )
         keyboard.append(
-            [{"text": "❌ بستن پنل", "callback_data": NavCallback(action="close").pack()}]
+            [
+                {
+                    "text": "🔙 بازگشت به انتخاب حالت",
+                    "callback_data": GenActionCallback(action="mode_picker").pack(),
+                },
+                {"text": "❌ بستن پنل", "callback_data": NavCallback(action="close").pack()},
+            ]
         )
 
+        return text, keyboard
+
+    def render_saved_characters_panel(
+        self,
+        owned_characters: list[Any],
+        page: int = 0,
+        page_size: int = 5,
+    ) -> tuple[str, list[list[dict[str, str]]]]:
+        """Renders paginated list of user's saved/owned characters to select into prompt."""
+        if not owned_characters:
+            text = (
+                f"👤 {bold('کاراکترهای من')}\n\n"
+                "شما هنوز هیچ کاراکتری ثبت یا دریافت نکرده‌اید.\n"
+                "می‌توانید از بخش کاتالوگ کاراکتر دریافت کنید یا از منوی ایجاد کاراکتر بسازید."
+            )
+            keyboard = [
+                [
+                    {
+                        "text": "🔙 بازگشت به پرامپت",
+                        "callback_data": GenActionCallback(action="mode_txt").pack(),
+                    }
+                ]
+            ]
+            return text, keyboard
+
+        total_pages = max(1, (len(owned_characters) + page_size - 1) // page_size)
+        start_idx = page * page_size
+        end_idx = min(start_idx + page_size, len(owned_characters))
+        current_slice = owned_characters[start_idx:end_idx]
+
+        lines = [
+            f"👤 {bold('انتخاب از کاراکترهای من')}",
+            f"صفحه {page + 1} از {total_pages}",
+            "",
+            "یک کاراکتر را لمس کنید تا مشخصات ظاهری آن به پرامپت اضافه شود:",
+        ]
+        text = "\n".join(lines)
+        keyboard: list[list[dict[str, str]]] = []
+
+        for item in current_slice:
+            char = item[0] if isinstance(item, tuple) else item
+            char_id = getattr(char, "character_id", "")
+            char_name = getattr(char, "name", "نامشخص")
+            keyboard.append(
+                [
+                    {
+                        "text": f"🎭 {char_name}",
+                        "callback_data": GenActionCallback(action="sel_char", nonce=char_id).pack(),
+                    }
+                ]
+            )
+
+        # Pagination row
+        nav_row: list[dict[str, str]] = []
+        if page > 0:
+            nav_row.append(
+                {
+                    "text": "⬅️ قبلی",
+                    "callback_data": GenActionCallback(
+                        action="saved_char_pg", nonce=str(page - 1)
+                    ).pack(),
+                }
+            )
+        nav_row.append(
+            {
+                "text": f"📄 {page + 1}/{total_pages}",
+                "callback_data": GenActionCallback(action="saved_char_pg", nonce=str(page)).pack(),
+            }
+        )
+        if end_idx < len(owned_characters):
+            nav_row.append(
+                {
+                    "text": "بعدی ➡️",
+                    "callback_data": GenActionCallback(
+                        action="saved_char_pg", nonce=str(page + 1)
+                    ).pack(),
+                }
+            )
+        if nav_row:
+            keyboard.append(nav_row)
+
+        keyboard.append(
+            [
+                {
+                    "text": "🔙 بازگشت به پرامپت",
+                    "callback_data": GenActionCallback(action="mode_txt").pack(),
+                }
+            ]
+        )
         return text, keyboard

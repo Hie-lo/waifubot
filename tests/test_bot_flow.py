@@ -283,6 +283,79 @@ class TestBotFlow(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(app)
             self.assertIn("session_factory", app.bot_data)
 
+    def test_ai_enhance_and_saved_character_panels(self) -> None:
+        """Verify AI prompt enhance and saved character panels in SpecialCharacterStudioHandler."""
+        from waifubot.bot.handlers.generate import SpecialCharacterStudioHandler
+        from waifubot.bot.panel import PanelEngine
+        from waifubot.bot.wizard import WizardState, WizardStore
+        from waifubot.db.models import CharacterRecord
+
+        engine = PanelEngine()
+        store = WizardStore()
+        handler = SpecialCharacterStudioHandler(
+            panel_engine=engine,
+            wizard_store=store,
+            config_path="config/vision_lab_presets.yaml",
+        )
+
+        # 1. Check AI enhance button in studio panel
+        state = handler.start_studio_wizard(user_id=10, chat_id=10)
+        state = handler.select_character(state, index=0)
+        _, studio_kb = handler.render_studio_panel(state)
+        studio_buttons = [b["text"] for row in studio_kb for b in row]
+        self.assertTrue(any("بهبود پرامپت با هوش مصنوعی" in txt for txt in studio_buttons))
+
+        # 2. Check Text-to-Image empty panel has saved char picker
+        txt_state = WizardState(user_id=10, chat_id=10, mode="custom")
+        _, empty_kb = handler.render_text_to_image_panel(txt_state)
+        empty_buttons = [b["text"] for row in empty_kb for b in row]
+        self.assertTrue(any("انتخاب از کاراکترهای من" in txt for txt in empty_buttons))
+
+        # 3. Check Text-to-Image filled panel has AI enhance and saved char picker
+        txt_state.custom_prompt = "cyberpunk girl with neon katana"
+        _, filled_kb = handler.render_text_to_image_panel(txt_state)
+        filled_buttons = [b["text"] for row in filled_kb for b in row]
+        self.assertTrue(any("بهبود پرامپت با هوش مصنوعی" in txt for txt in filled_buttons))
+        self.assertTrue(any("انتخاب کاراکتر" in txt for txt in filled_buttons))
+
+        # 4. Check saved character list rendering
+        empty_text, _ = handler.render_saved_characters_panel([])
+        self.assertIn("هیچ کاراکتری ثبت یا دریافت نکرده‌اید", empty_text)
+
+        mock_char = CharacterRecord(
+            character_id="char-abc",
+            name="Asuka Langley",
+            appearance_facts="red hair, plugsuit, blue eyes",
+            created_by=10,
+        )
+        saved_text, saved_kb = handler.render_saved_characters_panel([mock_char])
+        self.assertIn("انتخاب از کاراکترهای من", saved_text)
+        saved_btns = [b["text"] for row in saved_kb for b in row]
+        self.assertTrue(any("Asuka Langley" in txt for txt in saved_btns))
+
+    def test_build_bot_app_httpx_timeout_and_proxy(self) -> None:
+        """Verify build_bot_app configures HTTPXRequest with extended timeouts and proxy."""
+        import os
+        from unittest.mock import patch
+
+        from waifubot.bot.app import build_bot_app
+
+        env_patch = {
+            "BOT_TOKEN": "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ123456789",
+            "DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+            "TELEGRAM_PROXY_URL": "http://127.0.0.1:7890",
+        }
+        with patch.dict(os.environ, env_patch):
+            app = build_bot_app()
+            # Inspect HTTPXRequest config on app.bot
+            req = app.bot.request
+            self.assertEqual(req.read_timeout, 120.0)
+            timeout = req._client_kwargs["timeout"]
+            self.assertEqual(timeout.connect, 60.0)
+            self.assertEqual(timeout.read, 120.0)
+            self.assertEqual(timeout.write, 120.0)
+            self.assertEqual(req._client_kwargs["proxy"], "http://127.0.0.1:7890")
+
 
 if __name__ == "__main__":
     unittest.main()

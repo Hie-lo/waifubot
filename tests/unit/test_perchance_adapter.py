@@ -100,6 +100,91 @@ class TestPerchanceAdapter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(out_json["images"]), 2)
         self.assertEqual(out_json["seed"], 421890)
 
+    async def test_extract_images_from_context_data_url(self) -> None:
+        """Verifies _extract_images_from_context decodes base64 dataUrls extracted from canvas."""
+        provider = PerchanceProvider(mock_mode=False)
+
+        class MockContextObj:
+            async def evaluate(self, script: str) -> list[dict[str, Any]]:
+                return [
+                    {
+                        "src": "https://perchance.org/img1.png",
+                        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                        "width": 512,
+                        "height": 512,
+                    }
+                ]
+
+        extracted = await provider._extract_images_from_context(
+            MockContextObj(), existing_urls=set()
+        )
+        self.assertEqual(len(extracted), 1)
+        data, src = extracted[0]
+        self.assertEqual(src, "https://perchance.org/img1.png")
+        self.assertTrue(data.startswith(b"\x89PNG"))
+
+    async def test_playwright_page_sequential_click_generation(self) -> None:
+        """Verifies multi-click sequential image extraction on simulated Playwright page."""
+        provider = PerchanceProvider(mock_mode=False)
+
+        class MockLocator:
+            def __init__(self, count_val: int = 1) -> None:
+                self.count_val = count_val
+
+            @property
+            def first(self) -> "MockLocator":
+                return self
+
+            async def count(self) -> int:
+                return self.count_val
+
+            async def fill(self, text: str, timeout: int = 5000) -> None:
+                pass
+
+            async def click(self, timeout: int = 5000) -> None:
+                pass
+
+        class MockPlaywrightPage:
+            def __init__(self) -> None:
+                self.url = "https://perchance.org/vision-lab-studio"
+                self.frames: list[Any] = []
+                self._click_count = 0
+
+            async def goto(self, url: str, wait_until: str = "load", timeout: int = 60000) -> None:
+                self.url = url
+
+            def locator(self, selector: str) -> MockLocator:
+                return MockLocator(1)
+
+            async def query_selector(self, selector: str) -> None:
+                return None
+
+            async def evaluate(self, script: str) -> list[dict[str, Any]]:
+                self._click_count += 1
+                return [
+                    {
+                        "src": f"https://perchance.org/gen_{self._click_count}.png",
+                        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                        "width": 512,
+                        "height": 512,
+                    }
+                ]
+
+        page = MockPlaywrightPage()
+        slot = MockSlot("slot-playwright")
+        slot.page = page
+
+        images = await provider.generate(
+            prompt="toki anime girl",
+            negative_prompt="blurry",
+            needed_count=2,
+            slot=slot,
+            job_scope="vision_lab",
+        )
+        self.assertEqual(len(images), 2)
+        for img in images:
+            self.assertTrue(img.startswith(b"\x89PNG"))
+
 
 if __name__ == "__main__":
     unittest.main()

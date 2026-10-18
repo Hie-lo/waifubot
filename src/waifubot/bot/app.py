@@ -92,11 +92,13 @@ def build_bot_app(
     admin_ids: list[int] | None = None,
 ) -> Any:
     """Builds and wires the Telegram Application with handlers, DB, and services."""
+    import asyncio
     import contextlib
     import os
     import sys
     from typing import Any
 
+    from sqlalchemy import select
     from telegram import (
         InlineKeyboardButton,
         InlineKeyboardMarkup,
@@ -296,20 +298,55 @@ def build_bot_app(
                 return False
 
     async def send_user_photo(chat_id: int, photo: bytes, caption: str = "") -> None:
-        try:
-            import io
+        import io
+        import logging
 
-            bio = io.BytesIO(photo)
-            bio.name = "image.png"
-            await application.bot.send_photo(
+        logger = logging.getLogger(__name__)
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                bio = io.BytesIO(photo)
+                bio.name = "image.png"
+                await application.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=bio,
+                    caption=caption,
+                    write_timeout=120.0,
+                    read_timeout=120.0,
+                    connect_timeout=60.0,
+                )
+                logger.info("Successfully sent photo to chat %s (attempt %s)", chat_id, attempt)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Attempt %s/%s failed to send photo to chat %s: %s",
+                    attempt,
+                    max_retries,
+                    chat_id,
+                    exc,
+                )
+                if attempt < max_retries:
+                    await asyncio.sleep(2.0 * attempt)
+                else:
+                    with contextlib.suppress(Exception):
+                        await application.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"⚠️ خطا در ارسال تصویر به تلگرام: {exc}\n"
+                                "لطفاً اتصال اینترنت، فیلترشکن یا پروکسی ربات را بررسی نمایید."
+                            ),
+                        )
+
+    async def send_user_message(chat_id: int, text: str) -> None:
+        with contextlib.suppress(Exception):
+            await application.bot.send_message(
                 chat_id=chat_id,
-                photo=bio,
-                caption=caption,
+                text=text,
+                parse_mode="HTML",
+                write_timeout=60.0,
+                read_timeout=60.0,
+                connect_timeout=30.0,
             )
-        except Exception as exc:
-            import logging
-
-            logging.getLogger(__name__).warning("Failed to send photo to chat %s: %s", chat_id, exc)
 
     async def on_post_init(app: Application) -> None:
         await init_db(engine)
@@ -337,6 +374,7 @@ def build_bot_app(
             settings_service=settings_service,
             image_store=container.image_store,
             telegram_sender=send_user_photo,
+            telegram_message_sender=send_user_message,
         )
         worker_pool.start()
         app.bot_data["worker_pool"] = worker_pool
@@ -348,9 +386,27 @@ def build_bot_app(
         if hasattr(container.slot_pool, "close"):
             await container.slot_pool.close()
 
+    from telegram.request import HTTPXRequest
+
+    proxy_url = (
+        os.environ.get("TELEGRAM_PROXY_URL")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("HTTP_PROXY")
+    )
+    request_cfg = HTTPXRequest(
+        connection_pool_size=16,
+        connect_timeout=60.0,
+        read_timeout=120.0,
+        write_timeout=120.0,
+        media_write_timeout=120.0,
+        pool_timeout=60.0,
+        proxy=proxy_url if proxy_url else None,
+    )
+
     application = (
         ApplicationBuilder()
         .token(resolved_token)
+        .request(request_cfg)
         .post_init(on_post_init)
         .post_shutdown(on_post_shutdown)
         .build()
@@ -951,6 +1007,145 @@ def build_bot_app(
                             reply_markup=kb,
                             screen="txt2img",
                         )
+                elif cb.action in ("pick_saved_char", "saved_char_pg"):
+                    from waifubot.services.ownership import list_user_characters
+
+                    page = int(cb.nonce) if cb.nonce and cb.nonce.isdigit() else 0
+                    owned_chars = await list_user_characters(session, user.id)
+                    text, kb = studio_handler.render_saved_characters_panel(
+                        owned_characters=owned_chars, page=page
+                    )
+                    await panel_engine.render_panel(
+                        admin_id=user.id,
+                        chat_id=chat.id,
+                        text=text,
+                        reply_markup=kb,
+                        screen="saved_chars",
+                    )
+                elif cb.action == "sel_char":
+                    from waifubot.bot.wizard import WizardState
+                    from waifubot.db.models import CharacterRecord
+
+                    state = studio_handler.wizard_store.get(user.id, chat.id)
+                    if not state:
+                        state = WizardState(user_id=user.id, chat_id=chat.id, mode="custom")
+
+                    char_id = cb.nonce
+                    c_stmt = select(CharacterRecord).where(
+                        CharacterRecord.character_id == char_id,
+                        CharacterRecord.is_current.is_(True),
+                    )
+                    c_res = await session.execute(c_stmt)
+                    char_obj = c_res.scalar_one_or_none()
+                    char_name = char_obj.name if char_obj else ""
+                    if char_obj:
+                        char_facts = f"{char_obj.name}, {char_obj.appearance_facts}".strip().strip(
+                            ","
+                        )
+                        if state.custom_prompt.strip():
+                            state.custom_prompt = f"{char_facts}, {state.custom_prompt.strip()}"
+                        else:
+                            state.custom_prompt = char_facts
+                        state.step = "ready"
+                        studio_handler.wizard_store.set(state)
+
+                    text, kb = studio_handler.render_text_to_image_panel(state)
+                    status_prefix = (
+                        f"✅ <i>کاراکتر «{char_name}» به پرامپت اضافه شد.</i>\n\n"
+                        if char_name
+                        else ""
+                    )
+                    await panel_engine.render_panel(
+                        admin_id=user.id,
+                        chat_id=chat.id,
+                        text=f"{status_prefix}{text}",
+                        reply_markup=kb,
+                        screen="txt2img",
+                    )
+                elif cb.action == "enhance":
+                    state = studio_handler.wizard_store.get(user.id, chat.id)
+                    if not state:
+                        return
+                    is_custom = state.mode == "custom"
+                    base_text = state.custom_prompt if is_custom else state.compose_prompt()
+                    if not base_text or not base_text.strip():
+                        warn_msg = (
+                            "⚠️ لطفاً ابتدا متن پرامپت یا گزینه‌های کاراکتر را انتخاب کنید."
+                            if loc == "fa"
+                            else "⚠️ Please enter a prompt or choose options first."
+                        )
+                        text, kb = (
+                            studio_handler.render_text_to_image_panel(state)
+                            if is_custom
+                            else studio_handler.render_studio_panel(state)
+                        )
+                        await panel_engine.render_panel(
+                            admin_id=user.id,
+                            chat_id=chat.id,
+                            text=f"{warn_msg}\n\n{text}",
+                            reply_markup=kb,
+                            screen="txt2img" if is_custom else "studio",
+                        )
+                        return
+
+                    enhancer = getattr(container, "enhancer", None)
+                    if enhancer is None:
+                        from waifubot.adapters.ai_factory import create_enhancer
+
+                        enhancer = create_enhancer()
+
+                    try:
+                        enhanced_text = await asyncio.wait_for(
+                            enhancer.enhance_prompt(scene=base_text),
+                            timeout=30.0,
+                        )
+                        from waifubot.core.safety import recheck_enhancer_output
+
+                        final_prompt, is_safe, reason = recheck_enhancer_output(
+                            base_text, enhanced_text
+                        )
+                        if is_safe and final_prompt:
+                            state.custom_prompt = final_prompt
+                            studio_handler.wizard_store.set(state)
+                            text, kb = (
+                                studio_handler.render_text_to_image_panel(state)
+                                if is_custom
+                                else studio_handler.render_studio_panel(state)
+                            )
+                            await panel_engine.render_panel(
+                                admin_id=user.id,
+                                chat_id=chat.id,
+                                text=f"✨ <i>پرامپت با هوش مصنوعی ارتقا یافت:</i>\n\n{text}",
+                                reply_markup=kb,
+                                screen="txt2img" if is_custom else "studio",
+                            )
+                        else:
+                            err_reason = reason or "محتوای نامناسب تشخیص داده شد."
+                            text, kb = (
+                                studio_handler.render_text_to_image_panel(state)
+                                if is_custom
+                                else studio_handler.render_studio_panel(state)
+                            )
+                            await panel_engine.render_panel(
+                                admin_id=user.id,
+                                chat_id=chat.id,
+                                text=f"⚠️ بهینه‌سازی انجام نشد ({err_reason})\n\n{text}",
+                                reply_markup=kb,
+                                screen="txt2img" if is_custom else "studio",
+                            )
+                    except Exception as exc:
+                        text, kb = (
+                            studio_handler.render_text_to_image_panel(state)
+                            if is_custom
+                            else studio_handler.render_studio_panel(state)
+                        )
+                        await panel_engine.render_panel(
+                            admin_id=user.id,
+                            chat_id=chat.id,
+                            text=f"⚠️ خطا در ارتباط با هوش مصنوعی ({exc})\n\n{text}",
+                            reply_markup=kb,
+                            screen="txt2img" if is_custom else "studio",
+                        )
                 else:
                     state = studio_handler.wizard_store.get(user.id, chat.id)
                     if state:
@@ -970,17 +1165,23 @@ def build_bot_app(
                             is_vl = state.mode == "special_studio"
                             prompt = state.compose_prompt()
                             if not prompt.strip():
-                                await panel_engine.answer_callback_instant(
-                                    query,
-                                    text="⚠️ پرامپت خالی است. لطفاً گزینه‌ها یا پرامپت را مشخص کنید."
-                                    if loc == "fa"
-                                    else "⚠️ Prompt is empty.",
-                                    show_alert=True,
+                                text, kb = (
+                                    studio_handler.render_studio_panel(state)
+                                    if is_vl
+                                    else studio_handler.render_text_to_image_panel(state)
+                                )
+                                await panel_engine.render_panel(
+                                    admin_id=user.id,
+                                    chat_id=chat.id,
+                                    text="⚠️ پرامپت خالی است. لطفاً گزینه‌ها یا پرامپت را مشخص کنید.\n\n"
+                                    + text,
+                                    reply_markup=kb,
+                                    screen="studio" if is_vl else "txt2img",
                                 )
                                 return
                             job_scope = "vision_lab" if is_vl else "user"
                             try:
-                                await user_gen_handler.create_user_job(
+                                job = await user_gen_handler.create_user_job(
                                     session=session,
                                     user_id=user.id,
                                     prompt=prompt,
@@ -991,17 +1192,66 @@ def build_bot_app(
                                 )
                                 await session.commit()
                                 studio_handler.wizard_store.clear(user.id, chat.id)
-                                await panel_engine.answer_callback_instant(
-                                    query,
-                                    text="🚀 کار تولید تصویر ثبت شد و در صف قرار گرفت!"
-                                    if loc == "fa"
-                                    else "🚀 Job queued successfully!",
-                                    show_alert=True,
+                                mode_name = (
+                                    "استودیوی کاراکترهای ویژه (Vision Lab)"
+                                    if is_vl
+                                    else "تبدیل متن به تصویر (Text-to-Image)"
                                 )
-                                await panel_engine.close_panel(user.id, chat.id)
+                                prompt_summary = (
+                                    escape_html(prompt[:250]) + "..."
+                                    if len(prompt) > 250
+                                    else escape_html(prompt)
+                                )
+                                confirm_text = (
+                                    f"🚀 <b>درخواست تولید تصویر با موفقیت ثبت شد!</b>\n\n"
+                                    f"🆔 <b>شناسه کار:</b> <code>{job.job_id}</code>\n"
+                                    f"🔢 <b>تعداد تصاویر:</b> <b>{state.target_count}</b>\n"
+                                    f"⚙️ <b>مدل:</b> <i>{mode_name}</i>\n"
+                                    f"📝 <b>پرامپت:</b>\n<code>{prompt_summary}</code>\n\n"
+                                    f"⏳ <i>درخواست شما در صف پردازش قرار گرفت. به محض آماده شدن، تصاویر به همین چت ارسال خواهند شد.</i>"
+                                    if loc == "fa"
+                                    else (
+                                        f"🚀 <b>Generation job queued successfully!</b>\n\n"
+                                        f"🆔 <b>Job ID:</b> <code>{job.job_id}</code>\n"
+                                        f"🔢 <b>Count:</b> <b>{state.target_count}</b>\n"
+                                        f"⚙️ <b>Mode:</b> <i>{mode_name}</i>\n"
+                                        f"📝 <b>Prompt:</b>\n<code>{prompt_summary}</code>\n\n"
+                                        f"⏳ <i>Your job is being processed. Images will be sent here upon completion.</i>"
+                                    )
+                                )
+                                kb = [
+                                    [
+                                        {
+                                            "text": "🎨 ساخت تصویر جدید",
+                                            "callback_data": GenActionCallback(
+                                                action="mode_picker"
+                                            ).pack(),
+                                        },
+                                        {
+                                            "text": "❌ بستن",
+                                            "callback_data": NavCallback(action="close").pack(),
+                                        },
+                                    ]
+                                ]
+                                await panel_engine.render_panel(
+                                    admin_id=user.id,
+                                    chat_id=chat.id,
+                                    text=confirm_text,
+                                    reply_markup=kb,
+                                    screen="submitted",
+                                )
                             except Exception as exc:
-                                await panel_engine.answer_callback_instant(
-                                    query, text=f"⚠️ {exc}", show_alert=True
+                                text, kb = (
+                                    studio_handler.render_studio_panel(state)
+                                    if is_vl
+                                    else studio_handler.render_text_to_image_panel(state)
+                                )
+                                await panel_engine.render_panel(
+                                    admin_id=user.id,
+                                    chat_id=chat.id,
+                                    text=f"⚠️ <b>خطا در ثبت درخواست:</b>\n{escape_html(str(exc))}\n\n{text}",
+                                    reply_markup=kb,
+                                    screen="error",
                                 )
 
             elif isinstance(cb, CatalogCallback):

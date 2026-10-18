@@ -34,6 +34,7 @@ class WorkerPool:
         idle_sleep_seconds: float = 0.5,
         image_store: ImageStore | None = None,
         telegram_sender: Any | None = None,
+        telegram_message_sender: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.slot_pool = slot_pool
@@ -44,6 +45,7 @@ class WorkerPool:
         self.idle_sleep_seconds = idle_sleep_seconds
         self.image_store = image_store
         self.telegram_sender = telegram_sender
+        self.telegram_message_sender = telegram_message_sender
 
         self._stop_event = asyncio.Event()
         self._worker_tasks: dict[str, asyncio.Task[None]] = {}
@@ -244,6 +246,36 @@ class WorkerPool:
                             photo=asset.content,
                             caption=f"🎨 تصویر {idx} از {total_imgs}\nپرامپت: {prompt[:100]}",
                         )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).error("Job %s execution failed: %s", job_id, exc)
+            async with self.session_factory() as session, session.begin():
+                res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
+                rec = res.scalar_one_or_none()
+                if rec:
+                    rec.status = "failed"
+                    rec.lease_owner = None
+                    rec.updated_at = time.time()
+                    with contextlib.suppress(Exception):
+                        await refund_reservation(
+                            session=session,
+                            user_id=rec.requester_user_id,
+                            role="user",
+                            amount=rec.target_count,
+                        )
+                    if self.telegram_message_sender:
+                        with contextlib.suppress(Exception):
+                            await self.telegram_message_sender(
+                                chat_id=rec.requester_user_id,
+                                text=(
+                                    f"⚠️ <b>خطا در پردازش تصویر:</b>\n"
+                                    f"متأسفانه کار تولید تصویر با خطا مواجه شد:\n"
+                                    f"<code>{exc}</code>\n\n"
+                                    f"💰 سهمیه کسر شده به حساب شما بازگردانده شد."
+                                ),
+                            )
+            raise
         finally:
             await heartbeat.stop()
 
