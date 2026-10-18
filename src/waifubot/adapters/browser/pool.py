@@ -73,7 +73,11 @@ class BrowserSlotPool:
                     self._playwright = await async_playwright().start()
                     self._browser = await self._playwright.chromium.launch(
                         headless=self.headless,
-                        args=["--disable-dev-shm-usage", "--no-sandbox"],
+                        args=[
+                            "--disable-dev-shm-usage",
+                            "--no-sandbox",
+                            "--disable-blink-features=AutomationControlled",
+                        ],
                     )
                 except Exception:
                     # Fallback to mock mode if Playwright binary / browser is unavailable in environment
@@ -88,7 +92,13 @@ class BrowserSlotPool:
                     context: Any = _MockBrowserContext()
                     page: Any = _MockBrowserPage()
                 else:
-                    kwargs: dict[str, Any] = {}
+                    kwargs: dict[str, Any] = {
+                        "user_agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                        ),
+                        "viewport": {"width": 1280, "height": 800},
+                    }
                     if state_file.exists():
                         kwargs["storage_state"] = str(state_file)
                     context = await self._browser.new_context(**kwargs)

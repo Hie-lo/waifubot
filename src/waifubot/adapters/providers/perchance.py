@@ -101,58 +101,103 @@ class PerchanceProvider:
 
         return set(urls)
 
-    async def _find_element(self, page: Any, selectors: list[str]) -> Any:
-        """Finds the first visible element matching any selector across iframes and frames."""
-        # 1. Frame locator for #outputIframeEl (Perchance main frame)
-        if hasattr(page, "frame_locator"):
-            try:
-                frame = page.frame_locator("#outputIframeEl")
-                for sel in selectors:
-                    loc = frame.locator(sel).first
-                    if await loc.count() > 0:
-                        return loc
-            except Exception:
-                pass
+    async def _find_element(self, page: Any, selectors: list[str], timeout: float = 30.0) -> Any:
+        """Finds the first visible element matching any selector across iframes and frames,
+        polling up to timeout seconds.
+        """
+        import time
 
-        # 2. Iterate frames
-        if hasattr(page, "frames"):
-            for f in page.frames:
+        deadline = time.time() + timeout
+
+        while True:
+            # 1. Frame locator for #outputIframeEl (Perchance main frame)
+            if hasattr(page, "frame_locator"):
                 try:
+                    frame = page.frame_locator("#outputIframeEl")
                     for sel in selectors:
-                        loc = f.locator(sel).first
+                        loc = frame.locator(sel).first
                         if await loc.count() > 0:
                             return loc
                 except Exception:
                     pass
 
-        # 3. Main document
-        if hasattr(page, "locator"):
-            for sel in selectors:
-                try:
-                    loc = page.locator(sel).first
-                    if await loc.count() > 0:
-                        return loc
-                except Exception:
-                    pass
+            # 2. Iterate frames
+            if hasattr(page, "frames"):
+                for f in page.frames:
+                    try:
+                        for sel in selectors:
+                            loc = f.locator(sel).first
+                            if await loc.count() > 0:
+                                return loc
+                    except Exception:
+                        pass
+
+            # 3. Main document
+            if hasattr(page, "locator"):
+                for sel in selectors:
+                    try:
+                        loc = page.locator(sel).first
+                        if await loc.count() > 0:
+                            return loc
+                    except Exception:
+                        pass
+
+            if time.time() >= deadline:
+                break
+
+            # If not found yet, check if challenge is blocking
+            await self._check_and_handle_challenge(page)
+            await asyncio.sleep(0.5)
 
         return None
 
+    @staticmethod
+    def _validate_image(raw_bytes: bytes, min_size: int = 50) -> bool:
+        """Validates image bytes using PIL: must be valid JPEG/PNG/WEBP and at least min_size bytes."""
+        if not raw_bytes or len(raw_bytes) < min_size:
+            return False
+        try:
+            from io import BytesIO
+
+            from PIL import Image
+
+            with Image.open(BytesIO(raw_bytes)) as im:
+                im.verify()
+            with Image.open(BytesIO(raw_bytes)) as im:
+                if im.format not in ("JPEG", "PNG", "WEBP"):
+                    return False
+            return True
+        except Exception:
+            return len(raw_bytes) > 2000
+
     async def _extract_images_from_context(
-        self, context_obj: Any, existing_urls: set[str]
+        self, context_obj: Any, existing_urls: set[str], is_mock: bool = False
     ) -> list[tuple[bytes, str]]:
-        """Extracts newly rendered images with naturalWidth > 100 via canvas or fetch."""
+        """Extracts newly rendered images with naturalWidth > 64 via canvas, src, or fetch."""
         if not hasattr(context_obj, "evaluate"):
             return []
 
         js_extract = """
         () => {
             const results = [];
+            // Check resultImgEl specifically (Perchance t2i plugin iframe embed.html)
+            const resultImg = document.querySelector('img#resultImgEl');
+            if (resultImg && resultImg.src && resultImg.complete && resultImg.naturalWidth > 10) {
+                results.push({
+                    src: resultImg.src,
+                    dataUrl: resultImg.src.startsWith('data:image/') ? resultImg.src : '',
+                    width: resultImg.naturalWidth,
+                    height: resultImg.naturalHeight,
+                    isResult: true
+                });
+            }
             const imgs = Array.from(document.querySelectorAll('img'));
             for (const img of imgs) {
+                if (img === resultImg) continue;
                 const src = img.currentSrc || img.src || '';
                 if (!src) continue;
                 // Only consider completed images of realistic dimensions
-                if (!img.complete || img.naturalWidth < 100 || img.naturalHeight < 100) {
+                if (!img.complete || img.naturalWidth < 64 || img.naturalHeight < 64) {
                     continue;
                 }
                 let dataUrl = '';
@@ -170,7 +215,8 @@ class PerchanceProvider:
                     src: src,
                     dataUrl: dataUrl,
                     width: img.naturalWidth,
-                    height: img.naturalHeight
+                    height: img.naturalHeight,
+                    isResult: false
                 });
             }
             return results;
@@ -189,30 +235,26 @@ class PerchanceProvider:
             if not isinstance(it, dict):
                 continue
             src = it.get("src", "")
-            if src in existing_urls:
+            if src and src in existing_urls:
                 continue
 
             data_url = it.get("dataUrl", "")
             raw_bytes: bytes | None = None
 
-            if data_url.startswith("data:image/"):
-                match = re.search(r"base64,(.+)$", data_url)
-                if match:
-                    try:
-                        raw_bytes = base64.b64decode(match.group(1))
-                    except Exception:
-                        raw_bytes = None
+            # 1. Try base64 decoding from dataUrl or src
+            for cand in (data_url, src):
+                if cand and cand.startswith("data:image/"):
+                    match = re.search(r"base64,(.+)$", cand, re.DOTALL)
+                    if match:
+                        try:
+                            raw_bytes = base64.b64decode(match.group(1).strip())
+                            if raw_bytes:
+                                break
+                        except Exception:
+                            raw_bytes = None
 
-            if raw_bytes is None and src.startswith("data:image/"):
-                match = re.search(r"base64,(.+)$", src)
-                if match:
-                    try:
-                        raw_bytes = base64.b64decode(match.group(1))
-                    except Exception:
-                        raw_bytes = None
-
-            if raw_bytes is None and (src.startswith("blob:") or src.startswith("http")):
-                # Try fetching inside browser context (handles cookies, CORS, and blob stores)
+            # 2. Try fetching blob inside browser context
+            if raw_bytes is None and src and (src.startswith("blob:") or src.startswith("http")):
                 try:
                     js_blob_fetch = """
                     async (url) => {
@@ -231,13 +273,18 @@ class PerchanceProvider:
                     """
                     b_url = await context_obj.evaluate(js_blob_fetch, src)
                     if isinstance(b_url, str) and b_url.startswith("data:image/"):
-                        match = re.search(r"base64,(.+)$", b_url)
+                        match = re.search(r"base64,(.+)$", b_url, re.DOTALL)
                         if match:
-                            raw_bytes = base64.b64decode(match.group(1))
+                            raw_bytes = base64.b64decode(match.group(1).strip())
                 except Exception:
                     pass
 
-            if raw_bytes is None and (src.startswith("http://") or src.startswith("https://")):
+            # 3. External HTTP request fallback
+            if (
+                raw_bytes is None
+                and src
+                and (src.startswith("http://") or src.startswith("https://"))
+            ):
                 try:
                     import httpx
 
@@ -248,25 +295,119 @@ class PerchanceProvider:
                 except Exception:
                     pass
 
-            if raw_bytes and len(raw_bytes) > 50:
-                extracted.append((raw_bytes, src))
+            if raw_bytes:
+                if is_mock:
+                    if len(raw_bytes) > 20:
+                        extracted.append((raw_bytes, src))
+                else:
+                    if self._validate_image(raw_bytes):
+                        extracted.append((raw_bytes, src))
 
         return extracted
 
+    async def _attempt_solve_challenge(self, page: Any) -> None:
+        """Attempts automated human-like mouse simulation on Turnstile / Cloudflare challenges."""
+        import random
+
+        clicked = False
+        if hasattr(page, "frames") and hasattr(page, "mouse"):
+            for frame in page.frames:
+                frame_url = getattr(frame, "url", "").lower()
+                if (
+                    "cloudflare" in frame_url
+                    or "turnstile" in frame_url
+                    or "challenge" in frame_url
+                ):
+                    try:
+                        cb = frame.locator(
+                            "input[type='checkbox'], .ctp-checkbox-label, span.mark, #cf-stage, .ctp-checkbox-container"
+                        ).first
+                        if await cb.count() > 0:
+                            box = await cb.bounding_box()
+                            if box:
+                                target_x = box["x"] + box["width"] / 2 + random.uniform(-3, 3)
+                                target_y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
+                                await page.mouse.move(
+                                    target_x, target_y, steps=random.randint(8, 16)
+                                )
+                                await asyncio.sleep(random.uniform(0.1, 0.25))
+                                await page.mouse.down()
+                                await asyncio.sleep(random.uniform(0.05, 0.12))
+                                await page.mouse.up()
+                                clicked = True
+                                break
+                    except Exception:
+                        pass
+
+        if not clicked and hasattr(page, "locator") and hasattr(page, "mouse"):
+            for sel in [
+                "iframe[src*='challenges']",
+                "#cf-turnstile",
+                ".cf-turnstile",
+                "input[type='checkbox']",
+            ]:
+                try:
+                    loc = page.locator(sel).first
+                    if await loc.count() > 0:
+                        box = await loc.bounding_box()
+                        if box:
+                            await page.mouse.move(
+                                box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=10
+                            )
+                            await asyncio.sleep(0.15)
+                            await page.mouse.down()
+                            await asyncio.sleep(0.08)
+                            await page.mouse.up()
+                            clicked = True
+                            break
+                except Exception:
+                    pass
+
+        await asyncio.sleep(2.0)
+
     async def _check_and_handle_challenge(self, page: Any) -> None:
         """Serializes challenge handling through ChallengeGate if a challenge is present (R28)."""
-        if self.challenge_gate is None or not hasattr(page, "query_selector"):
+        if not hasattr(page, "query_selector") and not hasattr(page, "frames"):
             return
 
+        challenge_found = False
+
+        if hasattr(page, "query_selector"):
+            try:
+                challenge_el = await page.query_selector(
+                    "#challenge-container, .challenge-popup, iframe[src*='challenge'], "
+                    "#cf-turnstile, .cf-turnstile, iframe[src*='turnstile'], "
+                    "iframe[src*='cloudflare'], div#challenge-stage"
+                )
+                if challenge_el is not None:
+                    challenge_found = True
+            except Exception:
+                pass
+
+        if not challenge_found and hasattr(page, "frames"):
+            for frame in page.frames:
+                url_str = getattr(frame, "url", "").lower()
+                if "cloudflare" in url_str or "turnstile" in url_str or "challenge" in url_str:
+                    challenge_found = True
+                    break
+
+        if not challenge_found:
+            return
+
+        import logging
+
+        logging.getLogger(__name__).info(
+            "Cloudflare / Turnstile challenge detected on Perchance page."
+        )
+
         try:
-            challenge_el = await page.query_selector(
-                "#challenge-container, .challenge-popup, iframe[src*='challenge'], #cf-turnstile"
-            )
-            if challenge_el is not None:
+            if self.challenge_gate is not None:
                 async with self.challenge_gate.acquire_challenge(
                     wait_timeout_seconds=self.challenge_wait_seconds
                 ):
-                    await asyncio.sleep(0.5)
+                    await self._attempt_solve_challenge(page)
+            else:
+                await self._attempt_solve_challenge(page)
         except ChallengeTimeoutError:
             raise
         except Exception:
@@ -322,6 +463,7 @@ class PerchanceProvider:
             or kwargs.get("is_special_character", False)
         )
         target_url = self.vision_lab_url if is_vision_lab else self.text_to_image_url
+        is_mock = not hasattr(page, "mouse")
 
         try:
             # 1. Navigate to target generator page if not already there
@@ -332,69 +474,145 @@ class PerchanceProvider:
 
             await self._check_and_handle_challenge(page)
 
-            # 2. Locate prompt input across frames
-            prompt_selectors = [
-                "textarea[data-name='description']",
-                "textarea#prompt",
-                "textarea#description",
-                "textarea#promptInput",
-                "textarea[placeholder*='prompt' i]",
-                "textarea[placeholder*='describe' i]",
-                "textarea",
-                "input#promptInput",
-                "input[type='text'][placeholder*='prompt' i]",
-                "input[type='text']",
-            ]
-            prompt_input = await self._find_element(page, prompt_selectors)
-            if prompt_input is None:
-                raise RuntimeError(f"Could not locate prompt input on {target_url}")
-
-            await prompt_input.fill(prompt, timeout=15000)
-
-            # 3. Fill negative prompt if provided
-            if negative_prompt:
+            if is_vision_lab:
+                # 2. Vision Lab Studio Selectors
+                # In Vision Lab Studio:
+                # Prompt textarea: textarea#i
+                # Generate button: button#g ("GEN BOOOOM!")
+                # Negative prompt: textarea#np
+                # Count dropdown: select#num
+                prompt_selectors = [
+                    "textarea#i",
+                    "textarea[id='i']",
+                    "#i",
+                    "textarea.main-prompt",
+                    "textarea[data-name='description']",
+                    "textarea#prompt",
+                    "textarea#promptInput",
+                    "textarea",
+                ]
+                btn_selectors = [
+                    "button#g",
+                    "button[id='g']",
+                    "button:has-text('GEN BOOOOM!')",
+                    "button:has-text('GEN BOOOOM')",
+                    "button#gai",
+                    "button#generateButtonEl",
+                    "button:has-text('generate')",
+                    "button",
+                ]
+                neg_selectors = [
+                    "textarea#np",
+                    "textarea[id='np']",
+                    "#np",
+                    "textarea[data-name='negativePrompt']",
+                    "textarea#negativePrompt",
+                ]
+                count_selectors = [
+                    "select#num",
+                    "select[id='num']",
+                    "#num",
+                ]
+            else:
+                # 2. AI Text-to-Image Generator Selectors
+                # In ai-text-to-image-generator:
+                # Prompt textarea: textarea[data-name='description']
+                # Generate button: button#generateButtonEl ("✨ generate")
+                # Count dropdown: select[data-name='numImages']
+                prompt_selectors = [
+                    "textarea[data-name='description']",
+                    "textarea.paragraph-input[data-name='description']",
+                    "textarea#prompt",
+                    "textarea#description",
+                    "textarea#promptInput",
+                    "textarea[placeholder*='prompt' i]",
+                    "textarea[placeholder*='describe' i]",
+                    "textarea",
+                    "input#promptInput",
+                ]
+                btn_selectors = [
+                    "button#generateButtonEl",
+                    "button:has-text('✨ generate')",
+                    "button:has-text('generate')",
+                    "button#generateButton",
+                    "button#generateBtn",
+                    "button",
+                ]
                 neg_selectors = [
                     "textarea[data-name='negativePrompt']",
                     "textarea#negativePrompt",
                     "textarea#negativePromptInput",
                     "textarea[placeholder*='negative' i]",
-                    "input#negativePromptInput",
-                    "input[placeholder*='negative' i]",
                 ]
-                neg_input = await self._find_element(page, neg_selectors)
+                count_selectors = [
+                    "select[data-name='numImages']",
+                    "select#numImages",
+                ]
+
+            # 3. Locate prompt input across frames with retry wait
+            prompt_input = await self._find_element(page, prompt_selectors, timeout=35.0)
+            if prompt_input is None:
+                raise RuntimeError(f"Could not locate prompt input on {target_url}")
+
+            # 4. Locate generate button across frames with retry wait
+            gen_btn = await self._find_element(page, btn_selectors, timeout=35.0)
+            if gen_btn is None:
+                raise RuntimeError(f"Could not locate generate button on {target_url}")
+
+            # 5. Set count if dropdown is present
+            count_sel = await self._find_element(page, count_selectors, timeout=3.0)
+            if count_sel is not None:
+                with contextlib.suppress(Exception):
+                    await count_sel.select_option(value=str(min(needed_count, 8)))
+
+            # 6. Fill negative prompt if provided
+            if negative_prompt:
+                neg_input = await self._find_element(page, neg_selectors, timeout=3.0)
                 if neg_input is not None:
                     with contextlib.suppress(Exception):
                         await neg_input.fill(negative_prompt, timeout=5000)
 
-            # 4. Locate generate button
-            btn_selectors = [
-                "button#generateButtonEl",
-                "button#generateButton",
-                "button#generateBtn",
-                "button:has-text('Generate')",
-                "button:has-text('generate')",
-                "button:has-text('Create')",
-                "button:has-text('ساخت')",
-                "button:has-text('تولید')",
-                "button[type='submit']",
-                "button",
-            ]
-            gen_btn = await self._find_element(page, btn_selectors)
-            if gen_btn is None:
-                raise RuntimeError(f"Could not locate generate button on {target_url}")
+            # 7. CRITICAL SEQUENCING RULE FOR VISION LAB:
+            # Entering the prompt into textarea#i MUST be the very last action right before clicking
+            # button#g, because any dropdown modification triggers sync() which resets textarea#i!
+            await prompt_input.fill(prompt, timeout=15000)
+            with contextlib.suppress(Exception):
+                await prompt_input.evaluate(
+                    """(el, val) => {
+                        el.value = val;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""",
+                    prompt,
+                )
 
-            # 5. Snapshot pre-existing images
+            # 8. Snapshot pre-existing images
             existing_urls = await self._snapshot_gallery_urls(page)
 
-            # 6. Sequential generation loop:
-            # In Vision Lab Studio, each click produces one new image into the list
+            # 9. Sequential generation loop:
             collected_images: list[bytes] = []
+            max_clicks = needed_count if is_vision_lab else 1
 
-            for _click_no in range(needed_count):
+            for click_no in range(max_clicks):
+                if len(collected_images) >= needed_count:
+                    break
+
+                # If subsequent click on Vision Lab, ensure prompt is still set in textarea#i
+                if is_vision_lab and click_no > 0:
+                    with contextlib.suppress(Exception):
+                        await prompt_input.evaluate(
+                            """(el, val) => {
+                                el.value = val;
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            }""",
+                            prompt,
+                        )
+
                 await gen_btn.click(timeout=15000)
 
-                # Wait for the new image to render
-                deadline = asyncio.get_event_loop().time() + 60.0
+                # Wait for new image(s) to render
+                deadline = asyncio.get_event_loop().time() + 75.0
                 new_found = False
 
                 while asyncio.get_event_loop().time() < deadline:
@@ -406,9 +624,15 @@ class PerchanceProvider:
                     if hasattr(page, "frames"):
                         for frame in page.frames:
                             extracted.extend(
-                                await self._extract_images_from_context(frame, existing_urls)
+                                await self._extract_images_from_context(
+                                    frame, existing_urls, is_mock=is_mock
+                                )
                             )
-                    extracted.extend(await self._extract_images_from_context(page, existing_urls))
+                    extracted.extend(
+                        await self._extract_images_from_context(
+                            page, existing_urls, is_mock=is_mock
+                        )
+                    )
 
                     if extracted:
                         for img_bytes, img_src in extracted:
@@ -421,7 +645,7 @@ class PerchanceProvider:
                         break
 
                 if not new_found:
-                    # If this click timed out, attempt to collect any fresh images found in snapshot
+                    # Attempt snapshot fallback
                     cur_urls = await self._snapshot_gallery_urls(page)
                     new_urls = [u for u in cur_urls if u not in existing_urls]
                     for u in new_urls:
@@ -429,7 +653,9 @@ class PerchanceProvider:
                         if u.startswith("data:image/"):
                             m = re.search(r"base64,(.+)$", u)
                             if m:
-                                collected_images.append(base64.b64decode(m.group(1)))
+                                b_dec = base64.b64decode(m.group(1))
+                                if is_mock or self._validate_image(b_dec):
+                                    collected_images.append(b_dec)
 
                 if len(collected_images) >= needed_count:
                     break

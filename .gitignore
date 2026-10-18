@@ -41,3 +41,11 @@ Thumbs.db
 
 # Graphify
 graphify-out/
+
+# Uploaded screenshots & temp images
+bandicam*.jpg
+*.jpg
+*.jpeg
+*.png
+!tests/**/*.png
+!tests/**/*.jpg

@@ -194,7 +194,7 @@ def build_bot_app(
     browser_slot_pool = BrowserSlotPool(
         max_contexts=int(os.environ.get("MAX_BROWSER_CONTEXTS", 2)),
         storage_state_dir="storage/browser_sessions",
-        headless=True,
+        headless=os.environ.get("BROWSER_HEADLESS", "true").lower() in ("true", "1", "yes"),
     )
     perchance_provider = PerchanceProvider(
         vision_lab_url=os.environ.get("VISION_LAB_URL", "https://perchance.org/vision-lab-studio"),
