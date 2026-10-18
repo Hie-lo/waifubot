@@ -118,12 +118,13 @@ class StudioOptCallback(CallbackData):
 
     prefix = "so"
 
-    def __init__(self, category_key: str, item_index: int) -> None:
+    def __init__(self, category_key: str, item_index: int, page: int = 0) -> None:
         self.category_key = category_key
         self.item_index = item_index
+        self.page = page
 
     def pack(self) -> str:
-        data = f"{self.version}:{self.prefix}:{self.category_key}:{self.item_index}"
+        data = f"{self.version}:{self.prefix}:{self.category_key}:{self.item_index}:{self.page}"
         if len(data.encode("utf-8")) > 64:
             raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
         return data
@@ -132,8 +133,10 @@ class StudioOptCallback(CallbackData):
     def unpack(cls, payload: str) -> "StudioOptCallback":
         parts = payload.split(":")
         cat = parts[0] if len(parts) > 0 else ""
-        idx = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-        return cls(category_key=cat, item_index=idx)
+        raw_idx = parts[1] if len(parts) > 1 else "0"
+        idx = int(raw_idx) if raw_idx.lstrip("-").isdigit() else 0
+        pg = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        return cls(category_key=cat, item_index=idx, page=pg)
 
 
 @registry.register

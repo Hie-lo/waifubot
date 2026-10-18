@@ -70,11 +70,49 @@ class TestBotFlow(unittest.IsolatedAsyncioTestCase):
         handler.set_image_count(state, 8)
         self.assertEqual(state.target_count, 8)
 
-        # 8. Render studio panel
+        # 8. Render studio panel with category grid
         text, keyboard = handler.render_studio_panel(state)
         self.assertIn("Toki", text)
         self.assertIn("8", text)
         self.assertTrue(any("شروع ساخت" in btn["text"] for row in keyboard for btn in row))
+
+        # 9. Verify category sub-screen rendering and pagination
+        cat_text, cat_kb = handler.render_studio_panel(state, category_key="Outfit", opt_page=0)
+        self.assertIn("Outfit", cat_text)
+        self.assertTrue(any("بازگشت به دسته‌بندی‌ها" in btn["text"] for row in cat_kb for btn in row))
+
+        # 10. Verify cancel input is accepted to exit wizard
+        accepted_cancel, _ = handler.handle_typed_text(state, "/cancel")
+        self.assertTrue(accepted_cancel)
+        accepted_fa, _ = handler.handle_typed_text(state, "لغو")
+        self.assertTrue(accepted_fa)
+
+    def test_mode_selection_and_text_to_image_panels(self) -> None:
+        """Verify generation mode selection panel and Text-to-Image configuration flow."""
+        engine = PanelEngine()
+        handler = SpecialCharacterStudioHandler(panel_engine=engine)
+
+        # 1. Mode selection panel
+        text, kb = handler.render_mode_selection_panel()
+        self.assertIn("انتخاب حالت تولید تصویر", text)
+        all_buttons = [btn["text"] for row in kb for btn in row]
+        self.assertTrue(any("Vision Lab" in b for b in all_buttons))
+        self.assertTrue(any("Text to Image" in b for b in all_buttons))
+
+        # 2. Text to Image without prompt
+        from waifubot.bot.wizard import WizardState
+
+        state = WizardState(user_id=1, chat_id=1, mode="custom", step="prompt_input")
+        txt_empty, kb_empty = handler.render_text_to_image_panel(state)
+        self.assertIn("لطفاً متن یا پرامپت توصیفی", txt_empty)
+
+        # 3. Text to Image with prompt filled
+        state.custom_prompt = "a magical cyber anime girl under sakura tree"
+        txt_filled, kb_filled = handler.render_text_to_image_panel(state)
+        self.assertIn("a magical cyber anime girl", txt_filled)
+        all_filled_buttons = [btn["text"] for row in kb_filled for btn in row]
+        self.assertTrue(any("شروع ساخت تصاویر" in b for b in all_filled_buttons))
+        self.assertTrue(any("ویرایش پرامپت" in b for b in all_filled_buttons))
 
     async def test_telegram_rate_limiter_and_flood_wait(self) -> None:
         """Rate limiter honors flood wait backoff when Telegram returns retry_after (R42)."""

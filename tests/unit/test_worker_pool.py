@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import time
 import unittest
+from typing import Any
 
 from sqlalchemy import select
 
@@ -141,6 +142,67 @@ class TestWorkerPool(unittest.IsolatedAsyncioTestCase):
             self.settings.set("worker_count", 1)
             await asyncio.sleep(0.2)
             self.assertLessEqual(pool.active_worker_count, 2)
+        finally:
+            await pool.stop()
+
+    async def test_worker_pool_delivers_photo_and_persists_image(self) -> None:
+        """WorkerPool delivers photos via telegram_sender and persists images into image_store."""
+        from waifubot.adapters.storage.memory import MemoryImageStore
+        from waifubot.db.models import ImageRecord
+
+        sent_photos: list[dict[str, Any]] = []
+
+        async def mock_telegram_sender(chat_id: int, photo: bytes, caption: str = "") -> None:
+            sent_photos.append({"chat_id": chat_id, "photo": photo, "caption": caption})
+
+        store = MemoryImageStore()
+        now = time.time()
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="pool-job-delivery",
+                    requester_user_id=202,
+                    admin_id=202,
+                    prompt="heroic knight",
+                    target_count=2,
+                    needed=2,
+                    status="pending",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        pool = WorkerPool(
+            session_factory=self.session_factory,
+            slot_pool=self.slot_pool,
+            provider=self.provider,
+            generation_service=self.gen_service,
+            settings_service=self.settings,
+            idle_sleep_seconds=0.05,
+            image_store=store,
+            telegram_sender=mock_telegram_sender,
+        )
+
+        pool.start()
+        try:
+            deadline = time.time() + 5.0
+            done = False
+            while time.time() < deadline:
+                if len(sent_photos) >= 2:
+                    done = True
+                    break
+                await asyncio.sleep(0.1)
+
+            self.assertTrue(done, "Photos were not delivered via telegram_sender")
+            self.assertEqual(sent_photos[0]["chat_id"], 202)
+            self.assertIn("heroic knight", sent_photos[0]["caption"])
+
+            async with self.session_factory() as session:
+                res = await session.execute(
+                    select(ImageRecord).where(ImageRecord.job_id == "pool-job-delivery")
+                )
+                images = list(res.scalars().all())
+                self.assertEqual(len(images), 2)
         finally:
             await pool.stop()
 

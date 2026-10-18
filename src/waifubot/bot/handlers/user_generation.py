@@ -42,6 +42,7 @@ class UserGenerationHandler:
         role: str = "user",
         limits: Limits | None = None,
         negative_prompt: str = "",
+        job_scope: str = "user",
     ) -> JobRecord:
         """Atomically checks quota and creates a private generation job (R51, R54)."""
         if limits is None:
@@ -57,12 +58,13 @@ class UserGenerationHandler:
             amount=target_count,
         )
 
-        job_id = f"job_usr_{user_id}_{int(time.time() * 1000)}"
+        prefix = "job_vl" if job_scope in ("vision_lab", "special_studio") else "job_usr"
+        job_id = f"{prefix}_{user_id}_{int(time.time() * 1000)}"
         job = JobRecord(
             job_id=job_id,
             requester_user_id=user_id,
             admin_id=user_id,
-            job_scope="user",
+            job_scope=job_scope,
             prompt=prompt,
             negative_prompt=negative_prompt,
             target_count=target_count,

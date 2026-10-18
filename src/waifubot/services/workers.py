@@ -10,10 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from waifubot.core.models import GenerationJob, ImageAsset, JobStatus
-from waifubot.core.ports import GenerationProvider, ProviderSlotPool
-from waifubot.db.models import JobRecord
+from waifubot.core.ports import GenerationProvider, ImageStore, ProviderSlotPool
+from waifubot.db.models import ImageRecord, JobRecord
 from waifubot.services.claiming import HeartbeatTask, claim_next_job
 from waifubot.services.generation import GenerationService
+from waifubot.services.image_pipeline import persist_image_with_provenance
+from waifubot.services.quota import refund_reservation, settle_reservation
 from waifubot.services.resources import MemoryGuard
 from waifubot.services.settings import SettingsService
 
@@ -30,6 +32,8 @@ class WorkerPool:
         settings_service: SettingsService,
         memory_guard: MemoryGuard | None = None,
         idle_sleep_seconds: float = 0.5,
+        image_store: ImageStore | None = None,
+        telegram_sender: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.slot_pool = slot_pool
@@ -38,6 +42,8 @@ class WorkerPool:
         self.settings = settings_service
         self.memory_guard = memory_guard or MemoryGuard()
         self.idle_sleep_seconds = idle_sleep_seconds
+        self.image_store = image_store
+        self.telegram_sender = telegram_sender
 
         self._stop_event = asyncio.Event()
         self._worker_tasks: dict[str, asyncio.Task[None]] = {}
@@ -133,6 +139,8 @@ class WorkerPool:
                 prompt = record.prompt
                 neg_prompt = record.negative_prompt
                 needed = record.needed
+                job_scope = record.job_scope
+                requester_user_id = record.requester_user_id
 
             # Acquire exclusive slot (R35)
             async with self.slot_pool.acquire() as slot:
@@ -141,6 +149,7 @@ class WorkerPool:
                     negative_prompt=neg_prompt,
                     needed_count=needed,
                     slot=slot,
+                    job_scope=job_scope,
                 )
 
             # Build ImageAsset batch with sha256 content hashes
@@ -187,6 +196,54 @@ class WorkerPool:
                 record.lease_owner = None
                 record.lease_expires_at = None
                 record.updated_at = time.time()
+
+                # Persist kept images if image_store is configured
+                if self.image_store:
+                    for asset in batch_assets:
+                        if asset.content:
+                            existing_check = await session.execute(
+                                select(ImageRecord.id).where(ImageRecord.image_id == asset.sha256)
+                            )
+                            if existing_check.scalar_one_or_none() is None:
+                                await persist_image_with_provenance(
+                                    session=session,
+                                    image_store=self.image_store,
+                                    data=asset.content,
+                                    job_id=job_id,
+                                    final_prompt=prompt,
+                                    negative_prompt=neg_prompt,
+                                    provider=getattr(self.provider, "name", "perchance"),
+                                )
+
+                # Settle or refund quota
+                if record.status in ("succeeded", "failed"):
+                    with contextlib.suppress(Exception):
+                        if record.status == "succeeded":
+                            await settle_reservation(
+                                session=session,
+                                user_id=record.requester_user_id,
+                                role="user",
+                                reserved_amount=record.target_count,
+                                actual_amount=len(evaluated_job.kept_images) or record.target_count,
+                            )
+                        elif record.status == "failed":
+                            await refund_reservation(
+                                session=session,
+                                user_id=record.requester_user_id,
+                                role="user",
+                                amount=record.target_count,
+                            )
+
+            # Telegram photo delivery if sender callback provided
+            if self.telegram_sender and batch_assets:
+                total_imgs = len(batch_assets)
+                for idx, asset in enumerate(batch_assets, start=1):
+                    with contextlib.suppress(Exception):
+                        await self.telegram_sender(
+                            chat_id=requester_user_id,
+                            photo=asset.content,
+                            caption=f"🎨 تصویر {idx} از {total_imgs}\nپرامپت: {prompt[:100]}",
+                        )
         finally:
             await heartbeat.stop()
 

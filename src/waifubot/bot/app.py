@@ -183,12 +183,35 @@ def build_bot_app(
         resolved_admin_ids = admin_ids
 
     engine, session_factory = create_engine_and_sessionmaker(database_url=resolved_db_url)
+
+    from waifubot.adapters.browser.pool import BrowserSlotPool
+    from waifubot.adapters.providers.perchance import PerchanceProvider
+    from waifubot.adapters.storage.local_fs import LocalFsImageStore
+    from waifubot.services.workers import WorkerPool
+
+    browser_slot_pool = BrowserSlotPool(
+        max_contexts=int(os.environ.get("MAX_BROWSER_CONTEXTS", 2)),
+        storage_state_dir="storage/browser_sessions",
+        headless=True,
+    )
+    perchance_provider = PerchanceProvider(
+        vision_lab_url=os.environ.get("VISION_LAB_URL", "https://perchance.org/vision-lab-studio"),
+        text_to_image_url=os.environ.get(
+            "PROVIDER_PAGE_URL", "https://perchance.org/ai-text-to-image-generator"
+        ),
+    )
+    image_store = LocalFsImageStore(root_dir="storage/images")
+
     container = create_app(
         config=AppConfig(
             bot_token=resolved_token,
             admin_ids=tuple(resolved_admin_ids),
-        )
+        ),
+        slot_pool=browser_slot_pool,
+        provider=perchance_provider,
+        image_store=image_store,
     )
+    settings_service = SettingsService()
 
     def to_inline_markup(keyboard_data: Any) -> InlineKeyboardMarkup | None:
         if isinstance(keyboard_data, InlineKeyboardMarkup):
@@ -272,6 +295,22 @@ def build_bot_app(
             except Exception:
                 return False
 
+    async def send_user_photo(chat_id: int, photo: bytes, caption: str = "") -> None:
+        try:
+            import io
+
+            bio = io.BytesIO(photo)
+            bio.name = "image.png"
+            await application.bot.send_photo(
+                chat_id=chat_id,
+                photo=bio,
+                caption=caption,
+            )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning("Failed to send photo to chat %s: %s", chat_id, exc)
+
     async def on_post_init(app: Application) -> None:
         await init_db(engine)
         if resolved_admin_ids:
@@ -290,7 +329,32 @@ def build_bot_app(
                 )
             restart_ctrl.clear_restart_pending()
 
-    application = ApplicationBuilder().token(resolved_token).post_init(on_post_init).build()
+        worker_pool = WorkerPool(
+            session_factory=session_factory,
+            slot_pool=container.slot_pool,
+            provider=container.provider,
+            generation_service=container.generation_service,
+            settings_service=settings_service,
+            image_store=container.image_store,
+            telegram_sender=send_user_photo,
+        )
+        worker_pool.start()
+        app.bot_data["worker_pool"] = worker_pool
+
+    async def on_post_shutdown(app: Application) -> None:
+        wp = app.bot_data.get("worker_pool")
+        if wp:
+            await wp.stop()
+        if hasattr(container.slot_pool, "close"):
+            await container.slot_pool.close()
+
+    application = (
+        ApplicationBuilder()
+        .token(resolved_token)
+        .post_init(on_post_init)
+        .post_shutdown(on_post_shutdown)
+        .build()
+    )
     application.bot_data["session_factory"] = session_factory
 
     gateway = TelegramGatewayAdapter(application.bot)
@@ -304,7 +368,6 @@ def build_bot_app(
     user_mgmt_handler = UserManagementHandler()
     plans_handler = PlansHandler()
     system_handler = SystemManagementHandler()
-    settings_service = SettingsService()
     chat_engine = ChatEngine(chat_model=container.chat_model)
 
     async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -312,6 +375,9 @@ def build_bot_app(
         chat = update.effective_chat
         if not user or not chat or not update.message:
             return
+
+        chat_handler.exit_chat(user.id)
+        studio_handler.wizard_store.clear(user.id, chat.id)
 
         session_fac = context.bot_data["session_factory"]
         async with session_fac() as session:
@@ -375,6 +441,15 @@ def build_bot_app(
                 parse_mode="HTML",
             )
 
+    async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        chat = update.effective_chat
+        if user and chat:
+            studio_handler.wizard_store.clear(user.id, chat.id)
+            chat_handler.exit_chat(user.id)
+        if update.message:
+            await update.message.reply_text("عملیات جاری لغو شد.")
+
     async def on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not user or not update.message:
@@ -402,8 +477,13 @@ def build_bot_app(
 
     async def on_endchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
+        chat = update.effective_chat
         if not user or not update.message:
             return
+
+        chat_handler.exit_chat(user.id)
+        if chat:
+            studio_handler.wizard_store.clear(user.id, chat.id)
 
         session_fac = context.bot_data["session_factory"]
         async with session_fac() as session:
@@ -417,7 +497,6 @@ def build_bot_app(
             if not allowed:
                 return
 
-            chat_handler.exit_chat(user.id)
             msg = (
                 "گفتگو با کاراکتر به پایان رسید. حالت عادی فعال شد."
                 if ctx.locale == "fa"
@@ -477,18 +556,25 @@ def build_bot_app(
                 "⚙️ تنظیمات",
             }
 
+            if raw_text in ("/cancel", "لغو", "انصراف"):
+                chat_handler.exit_chat(user.id)
+                studio_handler.wizard_store.clear(user.id, chat.id)
+                await msg.reply_text("عملیات جاری لغو شد.")
+                return
+
             if raw_text in menu_buttons:
                 chat_handler.exit_chat(user.id)
+                studio_handler.wizard_store.clear(user.id, chat.id)
 
             if raw_text in (btn_gen, "🎨 تولید تصویر"):
-                state = studio_handler.start_studio_wizard(user.id, chat.id)
-                text, kb = studio_handler.render_studio_panel(state)
+                studio_handler.wizard_store.clear(user.id, chat.id)
+                text, kb = studio_handler.render_mode_selection_panel()
                 await panel_engine.render_panel(
                     admin_id=user.id,
                     chat_id=chat.id,
                     text=text,
                     reply_markup=kb,
-                    screen="studio",
+                    screen="mode_select",
                     force_new=True,
                 )
                 return
@@ -630,11 +716,29 @@ def build_bot_app(
                 return
 
             wizard_state = studio_handler.wizard_store.get(user.id, chat.id)
-            if wizard_state and wizard_state.mode == "special_studio":
-                accepted, feedback = studio_handler.handle_typed_text(wizard_state, raw_text)
-                if not accepted and feedback:
-                    await msg.reply_text(feedback)
-                return
+            if wizard_state:
+                if wizard_state.mode == "custom" and wizard_state.step in (
+                    "prompt_input",
+                    "edit_prompt",
+                ):
+                    wizard_state.custom_prompt = raw_text
+                    wizard_state.step = "count_select"
+                    studio_handler.wizard_store.set(wizard_state)
+                    text, kb = studio_handler.render_text_to_image_panel(wizard_state)
+                    await panel_engine.render_panel(
+                        admin_id=user.id,
+                        chat_id=chat.id,
+                        text=text,
+                        reply_markup=kb,
+                        screen="txt2img",
+                        force_new=True,
+                    )
+                    return
+                elif wizard_state.mode == "special_studio":
+                    accepted, feedback = studio_handler.handle_typed_text(wizard_state, raw_text)
+                    if not accepted and feedback:
+                        await msg.reply_text(feedback)
+                    return
 
     async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -675,6 +779,7 @@ def build_bot_app(
 
             if isinstance(cb, NavCallback):
                 if cb.action == "close":
+                    studio_handler.wizard_store.clear(user.id, chat.id)
                     await panel_engine.close_panel(user.id, chat.id)
                 elif cb.action == "back":
                     if cb.target == "settings":
@@ -750,10 +855,23 @@ def build_bot_app(
             elif isinstance(cb, StudioOptCallback):
                 state = studio_handler.wizard_store.get(user.id, chat.id)
                 if state:
-                    state = studio_handler.toggle_option(
-                        state, category_key=cb.category_key, option_val=str(cb.item_index)
-                    )
-                    text, kb = studio_handler.render_studio_panel(state)
+                    if cb.item_index == -2:
+                        text, kb = studio_handler.render_studio_panel(state, category_key="")
+                    elif cb.item_index == -1:
+                        text, kb = studio_handler.render_studio_panel(
+                            state, category_key=cb.category_key, opt_page=cb.page
+                        )
+                    else:
+                        cat_items = studio_handler.categories.get(cb.category_key, [])
+                        if 0 <= cb.item_index < len(cat_items):
+                            item = cat_items[cb.item_index]
+                            opt_val = item.get("prompt", item.get("name", ""))
+                            state = studio_handler.toggle_option(
+                                state, category_key=cb.category_key, option_val=opt_val
+                            )
+                        text, kb = studio_handler.render_studio_panel(
+                            state, category_key=cb.category_key, opt_page=cb.page
+                        )
                     await panel_engine.render_panel(
                         admin_id=user.id,
                         chat_id=chat.id,
@@ -766,6 +884,23 @@ def build_bot_app(
                 state = studio_handler.wizard_store.get(user.id, chat.id)
                 if state:
                     state = studio_handler.set_image_count(state, cb.count)
+                    if state.mode == "custom":
+                        text, kb = studio_handler.render_text_to_image_panel(state)
+                        screen = "txt2img"
+                    else:
+                        text, kb = studio_handler.render_studio_panel(state)
+                        screen = "studio"
+                    await panel_engine.render_panel(
+                        admin_id=user.id,
+                        chat_id=chat.id,
+                        text=text,
+                        reply_markup=kb,
+                        screen=screen,
+                    )
+
+            elif isinstance(cb, GenActionCallback):
+                if cb.action == "mode_vl":
+                    state = studio_handler.start_studio_wizard(user.id, chat.id)
                     text, kb = studio_handler.render_studio_panel(state)
                     await panel_engine.render_panel(
                         admin_id=user.id,
@@ -774,46 +909,100 @@ def build_bot_app(
                         reply_markup=kb,
                         screen="studio",
                     )
+                elif cb.action == "mode_txt":
+                    from waifubot.bot.wizard import WizardState
 
-            elif isinstance(cb, GenActionCallback):
-                state = studio_handler.wizard_store.get(user.id, chat.id)
-                if state:
-                    if cb.action == "change_char":
-                        state.selected_character = ""
-                        state.step = "character_select"
+                    state = WizardState(
+                        user_id=user.id,
+                        chat_id=chat.id,
+                        mode="custom",
+                        step="prompt_input",
+                    )
+                    studio_handler.wizard_store.set(state)
+                    text, kb = studio_handler.render_text_to_image_panel(state)
+                    await panel_engine.render_panel(
+                        admin_id=user.id,
+                        chat_id=chat.id,
+                        text=text,
+                        reply_markup=kb,
+                        screen="txt2img",
+                    )
+                elif cb.action == "mode_picker":
+                    studio_handler.wizard_store.clear(user.id, chat.id)
+                    text, kb = studio_handler.render_mode_selection_panel()
+                    await panel_engine.render_panel(
+                        admin_id=user.id,
+                        chat_id=chat.id,
+                        text=text,
+                        reply_markup=kb,
+                        screen="mode_select",
+                    )
+                elif cb.action == "edit_prompt":
+                    state = studio_handler.wizard_store.get(user.id, chat.id)
+                    if state:
+                        state.custom_prompt = ""
+                        state.step = "prompt_input"
                         studio_handler.wizard_store.set(state)
-                        text, kb = studio_handler.render_studio_panel(state)
+                        text, kb = studio_handler.render_text_to_image_panel(state)
                         await panel_engine.render_panel(
                             admin_id=user.id,
                             chat_id=chat.id,
                             text=text,
                             reply_markup=kb,
-                            screen="studio",
+                            screen="txt2img",
                         )
-                    elif cb.action == "submit":
-                        prompt = state.compose_prompt()
-                        try:
-                            await user_gen_handler.create_user_job(
-                                session=session,
-                                user_id=user.id,
-                                prompt=prompt,
-                                target_count=state.target_count,
-                                role=ctx.role,
-                                limits=ctx.limits,
+                else:
+                    state = studio_handler.wizard_store.get(user.id, chat.id)
+                    if state:
+                        if cb.action == "change_char":
+                            state.selected_character = ""
+                            state.step = "character_select"
+                            studio_handler.wizard_store.set(state)
+                            text, kb = studio_handler.render_studio_panel(state)
+                            await panel_engine.render_panel(
+                                admin_id=user.id,
+                                chat_id=chat.id,
+                                text=text,
+                                reply_markup=kb,
+                                screen="studio",
                             )
-                            await session.commit()
-                            await panel_engine.answer_callback_instant(
-                                query,
-                                text="🚀 کار تولید با موفقیت ثبت شد!"
-                                if loc == "fa"
-                                else "🚀 Job queued successfully!",
-                                show_alert=True,
-                            )
-                            await panel_engine.close_panel(user.id, chat.id)
-                        except Exception as exc:
-                            await panel_engine.answer_callback_instant(
-                                query, text=f"⚠️ {exc}", show_alert=True
-                            )
+                        elif cb.action == "submit":
+                            is_vl = state.mode == "special_studio"
+                            prompt = state.compose_prompt()
+                            if not prompt.strip():
+                                await panel_engine.answer_callback_instant(
+                                    query,
+                                    text="⚠️ پرامپت خالی است. لطفاً گزینه‌ها یا پرامپت را مشخص کنید."
+                                    if loc == "fa"
+                                    else "⚠️ Prompt is empty.",
+                                    show_alert=True,
+                                )
+                                return
+                            job_scope = "vision_lab" if is_vl else "user"
+                            try:
+                                await user_gen_handler.create_user_job(
+                                    session=session,
+                                    user_id=user.id,
+                                    prompt=prompt,
+                                    target_count=state.target_count,
+                                    role=ctx.role,
+                                    limits=ctx.limits,
+                                    job_scope=job_scope,
+                                )
+                                await session.commit()
+                                studio_handler.wizard_store.clear(user.id, chat.id)
+                                await panel_engine.answer_callback_instant(
+                                    query,
+                                    text="🚀 کار تولید تصویر ثبت شد و در صف قرار گرفت!"
+                                    if loc == "fa"
+                                    else "🚀 Job queued successfully!",
+                                    show_alert=True,
+                                )
+                                await panel_engine.close_panel(user.id, chat.id)
+                            except Exception as exc:
+                                await panel_engine.answer_callback_instant(
+                                    query, text=f"⚠️ {exc}", show_alert=True
+                                )
 
             elif isinstance(cb, CatalogCallback):
                 if cb.action == "page":
@@ -1173,6 +1362,7 @@ def build_bot_app(
 
     # Register handlers with PTB application
     application.add_handler(CommandHandler("start", on_start))
+    application.add_handler(CommandHandler("cancel", on_cancel))
     application.add_handler(CommandHandler("status", on_status))
     application.add_handler(CommandHandler("endchat", on_endchat))
     application.add_handler(CallbackQueryHandler(on_callback_query))
