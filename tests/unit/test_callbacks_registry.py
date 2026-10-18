@@ -5,6 +5,7 @@ import unittest
 from waifubot.bot.callbacks import (
     AccountCallback,
     AdminCallback,
+    ChannelCallback,
     GenActionCallback,
     GenCountCallback,
     MyImagesCallback,
@@ -46,6 +47,7 @@ class TestCallbackRegistry(unittest.TestCase):
             PlanCallback(action="view", plan_id="vip_pro", extra="1"),
             MyImagesCallback(action="view", img_id=12345, page=2),
             AccountCallback(action="view", extra=""),
+            ChannelCallback(action="view", channel_id=123, extra="reverify"),
         ]
 
         for cb in sample_callbacks:

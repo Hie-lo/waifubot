@@ -7,6 +7,7 @@ import time
 import unittest
 from datetime import datetime
 
+from waifubot.db.models import ChannelRecord
 from waifubot.db.session import create_engine_and_sessionmaker, init_db
 from waifubot.services.scheduler import (
     advance_schedule,
@@ -111,9 +112,34 @@ class TestSchedulerService(unittest.IsolatedAsyncioTestCase):
         now = time.time()
 
         async with self.session_factory() as session, session.begin():
+            ch1 = ChannelRecord(
+                tg_chat_id=-100111111,
+                title="Channel 1",
+                owner_user_id=1,
+                status="active",
+                scope="shared",
+                bot_rights_json="{}",
+                added_by=1,
+                created_at=now,
+                updated_at=now,
+            )
+            ch2 = ChannelRecord(
+                tg_chat_id=-100222222,
+                title="Channel 2",
+                owner_user_id=1,
+                status="active",
+                scope="shared",
+                bot_rights_json="{}",
+                added_by=1,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add_all([ch1, ch2])
+            await session.flush()
+
             s1 = await create_schedule(
                 session=session,
-                channel_id=-100111111,
+                channel_id=ch1.id,
                 topic_id=None,
                 post_count=2,
                 min_gap_minutes=60,
@@ -122,7 +148,7 @@ class TestSchedulerService(unittest.IsolatedAsyncioTestCase):
             )
             s2 = await create_schedule(
                 session=session,
-                channel_id=-100222222,
+                channel_id=ch2.id,
                 topic_id=42,
                 post_count=1,
                 min_gap_minutes=30,

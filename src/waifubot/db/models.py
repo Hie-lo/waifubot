@@ -2,7 +2,7 @@
 
 import time
 
-from sqlalchemy import BigInteger, Boolean, Float, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from waifubot.db.base import Base
@@ -75,6 +75,7 @@ class ImageRecord(Base):
     provider: Mapped[str] = mapped_column(String(64), default="perchance", nullable=False)
     provider_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
     is_enhanced: Mapped[bool] = mapped_column(default=False, nullable=False)
+    telegram_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, default=time.time, index=True, nullable=False)
 
 
@@ -106,7 +107,9 @@ class ScheduleRecord(Base):
     __tablename__ = "schedules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    channel_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    channel_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("channels.id"), index=True, nullable=False
+    )
     topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     post_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     random_order: Mapped[bool] = mapped_column(default=False, nullable=False)
@@ -215,3 +218,40 @@ class AdminInviteRecord(Base):
     expires_at: Mapped[float] = mapped_column(Float, index=True, nullable=False)
     used_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     used_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class ChannelRecord(Base):
+    """Registered channel or group with verified permissions and scope (R56–R59)."""
+
+    __tablename__ = "channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tg_chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), default="channel", nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    alias: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), default="private", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True, nullable=False)
+    bot_rights_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    verified_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    added_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    adder_role_in_chat: Mapped[str] = mapped_column(
+        String(32), default="administrator", nullable=False
+    )
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class ChannelTopicRecord(Base):
+    """Forum group topics for topic picker and targeted publishing (R23, R56)."""
+
+    __tablename__ = "channel_topics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("channels.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    topic_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -412,3 +412,30 @@ class AccountCallback(CallbackData):
         action = parts[0] if len(parts) > 0 else ""
         extra = parts[1] if len(parts) > 1 else ""
         return cls(action=action, extra=extra)
+
+
+@registry.register
+class ChannelCallback(CallbackData):
+    """Channel management callback (list, view, add, reverify, scope, toggle, del) (R56–R59)."""
+
+    prefix = "chn"
+
+    def __init__(self, action: str, channel_id: int | str = 0, extra: str = "") -> None:
+        self.action = action
+        self.channel_id = channel_id
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.channel_id}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "ChannelCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        raw_id = parts[1] if len(parts) > 1 else "0"
+        channel_id: int | str = int(raw_id) if raw_id.isdigit() else raw_id
+        extra = parts[2] if len(parts) > 2 else ""
+        return cls(action=action, channel_id=channel_id, extra=extra)

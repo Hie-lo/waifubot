@@ -98,6 +98,21 @@ class ChannelProbe(Protocol):
     async def get_bot_rights(self, chat_ref: str | int) -> dict[str, bool]: ...
 
 
+class TelegramPublisher(Protocol):
+    """Port for publishing images/albums to Telegram chats (R23, R24, R42)."""
+
+    async def send_photo(
+        self,
+        chat_id: int,
+        photo: str | bytes,
+        caption: str = "",
+        topic_id: int | None = None,
+        has_spoiler: bool = False,
+    ) -> str:
+        """Publishes photo and returns the Telegram file_id (R42)."""
+        ...
+
+
 class ChallengeTimeoutError(Exception):
     """Raised when waiting for human challenge resolution exceeds timeout (R28)."""
 

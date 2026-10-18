@@ -46,6 +46,8 @@ class TestAlembicMigrations(unittest.TestCase):
         self.assertIn("admin_invites", tables)
         self.assertIn("plans", tables)
         self.assertIn("usage_counters", tables)
+        self.assertIn("channels", tables)
+        self.assertIn("channel_topics", tables)
 
         # Test downgrade to base and re-upgrade
         command.downgrade(self.alembic_cfg, "base")
@@ -61,6 +63,16 @@ class TestAlembicMigrations(unittest.TestCase):
         self.assertIn("final_prompt", img_columns)
         self.assertIn("provider", img_columns)
         self.assertIn("is_enhanced", img_columns)
+        self.assertIn("telegram_file_id", img_columns)
+
+        # Verify channels table columns (R56–R59)
+        channel_columns = {col["name"] for col in inspector.get_columns("channels")}
+        self.assertIn("tg_chat_id", channel_columns)
+        self.assertIn("kind", channel_columns)
+        self.assertIn("owner_user_id", channel_columns)
+        self.assertIn("scope", channel_columns)
+        self.assertIn("status", channel_columns)
+        self.assertIn("bot_rights_json", channel_columns)
 
         # Verify characters table columns (R14, R18 versioning)
         char_columns = {col["name"] for col in inspector.get_columns("characters")}

@@ -111,12 +111,12 @@ Real test: `python -m pytest tests/unit/test_limits.py tests/unit/test_quota.py 
 
 ## Stage 10 — Channels (R56–R59)
 
-- [ ] Alembic `0012_channels`; migrate old schedule channel ids as `legacy_unverified`; `schedules.channel_id` FK
-- [ ] `ChannelProbe` port + gateway methods (`get_chat`, `get_chat_member`, bot rights, `request_chat` picker button)
-- [ ] `services/channels.py`: `verify_channel` (existence → bot rights → adder check → plan capacity), `assert_usable`, scope handling
-- [ ] `ChannelHealth` loop + `my_chat_member` handler: `lost_access`, schedule pause, notifications, re-verify + confirmed resume
-- [ ] Screens: *Settings → Channels* and *My channels* (add via picker / forward / typed id, card, re-verify, alias, enable/disable, default, topics, scope, remove with schedule guard)
-- [ ] Publish/scheduler use `assert_usable` and the R24 error path; users publish own images to own channels
+- [x] Alembic `0012_channels`; migrate old schedule channel ids as `legacy_unverified`; `schedules.channel_id` FK
+- [x] `ChannelProbe` port + gateway methods (`get_chat`, `get_chat_member`, bot rights, `request_chat` picker button)
+- [x] `services/channels.py`: `verify_channel` (existence → bot rights → adder check → plan capacity), `assert_usable`, scope handling
+- [x] `ChannelHealth` loop + `my_chat_member` handler: `lost_access`, schedule pause, notifications, re-verify + confirmed resume
+- [x] Screens: *Settings → Channels* and *My channels* (add via picker / forward / typed id, card, re-verify, alias, enable/disable, default, topics, scope, remove with schedule guard)
+- [x] Publish/scheduler use `assert_usable` and the R24 error path; users publish own images to own channels
 
 Real test: `python -m pytest tests/unit/test_channel_verify.py tests/unit/test_channel_health.py tests/unit/test_channel_scope.py tests/unit/test_publish.py -q`
 
