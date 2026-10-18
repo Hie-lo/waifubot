@@ -7,6 +7,7 @@ from waifubot.bot.callbacks import (
     AdminCallback,
     CatalogCallback,
     ChannelCallback,
+    ChatCallback,
     GenActionCallback,
     GenCountCallback,
     MyCharactersCallback,
@@ -52,6 +53,7 @@ class TestCallbackRegistry(unittest.TestCase):
             ChannelCallback(action="view", channel_id=123, extra="reverify"),
             CatalogCallback(action="claim", char_id="char_12345", page=1),
             MyCharactersCallback(action="view", char_id="char_12345", extra="release"),
+            ChatCallback(action="panel", char_id="char_12345", extra=""),
         ]
 
         for cb in sample_callbacks:

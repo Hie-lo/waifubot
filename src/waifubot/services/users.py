@@ -198,6 +198,9 @@ async def delete_user_record(
         old_val={"telegram_id": telegram_id, "name": user.name},
         new_val=None,
     )
+    from waifubot.services.chat.session import wipe_user_chat_data
+
+    await wipe_user_chat_data(session, telegram_id)
     await session.delete(user)
     await session.flush()
     return True

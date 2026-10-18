@@ -284,3 +284,49 @@ class ClaimPostRecord(Base):
     chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     message_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class CharacterPersonaRecord(Base):
+    """Character persona, compiled card, and version history (R62)."""
+
+    __tablename__ = "character_personas"
+
+    character_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    fields_json: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    card: Mapped[str] = mapped_column(Text, nullable=False)
+    card_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    prev_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class ChatSessionRecord(Base):
+    """Dialogue session between an owner and their character (R63)."""
+
+    __tablename__ = "chat_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    character_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    last_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class ChatMemoryRecord(Base):
+    """Compact chat memory with window, rolling summary, and durable facts (R64)."""
+
+    __tablename__ = "chat_memory"
+
+    session_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("chat_sessions.session_id", ondelete="CASCADE"), primary_key=True
+    )
+    window_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    facts_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    mem_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    turn_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    since_compaction: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)

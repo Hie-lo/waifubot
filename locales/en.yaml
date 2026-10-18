@@ -61,4 +61,8 @@ my_characters_title: "My Characters ({total} characters)"
 my_characters_empty: "You do not own any characters yet."
 character_released_listed: "Character {name} was released back to the public catalog."
 character_released_deleted: "Private character {name} was permanently deleted."
+chat_mode_active: "Live chat with {name} is active."
+chat_ended: "Live chat session with the character has ended."
+chat_disabled: "Character chat is currently disabled."
+
 

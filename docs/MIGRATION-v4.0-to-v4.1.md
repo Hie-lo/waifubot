@@ -132,14 +132,14 @@ Real test: `python -m pytest tests/unit/test_ownership.py tests/unit/test_claim_
 
 ## Stage 12 — Persona & character chat (R62–R66) — last development stage
 
-- [ ] Alembic `0014_personas`, `0015_chat`
-- [ ] `core/persona.py` and `core/chat_memory.py` (pure): fields, card compile + hash, budgets, JSON contract + repair
-- [ ] `ChatModel` port; `adapters/chat/anthropic.py` with prompt caching **[VERIFY minimum cacheable length and TTL]**, timeouts, usage reporting; env `AI_CHAT_MODEL`, `AI_CHAT_COMPACT_MODEL`
-- [ ] `services/personas.py`: button-driven field editing, **AI Enhance** (persona mode) with preview/confirm, recompile, one-step undo, canon auto-fill for known characters
-- [ ] `services/chat/*`: engine pipeline (R63), debounce merge, memory load/append, background compaction with per-session lock, usage counters, safety checks on input and output (R66)
-- [ ] Chat mode in the update router (precedence over R6), chat panel (end, persona, memory view/delete fact/reset, switch character), `/endchat`
-- [ ] Settings knobs (R65), `chat_enabled`, concurrency semaphore, cost-alert-only threshold
-- [ ] Privacy: no message text in logs/audit; wipe on release, delete character, delete user
-- [ ] **Final review pass** (AGENT.md checklist), SPEC ↔ ARCHITECTURE ↔ CHANGELOG consistency check, CHANGELOG finalization
+- [x] Alembic `0014_personas`, `0015_chat`
+- [x] `core/persona.py` and `core/chat_memory.py` (pure): fields, card compile + hash, budgets, JSON contract + repair
+- [x] `ChatModel` port; `adapters/chat/anthropic.py` with prompt caching **[VERIFY minimum cacheable length and TTL]**, timeouts, usage reporting; env `AI_CHAT_MODEL`, `AI_CHAT_COMPACT_MODEL`
+- [x] `services/personas.py`: button-driven field editing, **AI Enhance** (persona mode) with preview/confirm, recompile, one-step undo, canon auto-fill for known characters
+- [x] `services/chat/*`: engine pipeline (R63), debounce merge, memory load/append, background compaction with per-session lock, usage counters, safety checks on input and output (R66)
+- [x] Chat mode in the update router (precedence over R6), chat panel (end, persona, memory view/delete fact/reset, switch character), `/endchat`
+- [x] Settings knobs (R65), `chat_enabled`, concurrency semaphore, cost-alert-only threshold
+- [x] Privacy: no message text in logs/audit; wipe on release, delete character, delete user
+- [x] **Final review pass** (AGENT.md checklist), SPEC ↔ ARCHITECTURE ↔ CHANGELOG consistency check, CHANGELOG finalization
 
 Real test: `python -m pytest tests/unit/test_persona.py tests/unit/test_chat_memory.py tests/unit/test_chat_engine.py tests/unit/test_compaction.py tests/test_bot_flow.py -q && python -m ruff check src/ tests/ alembic/ && python -m pyright && lint-imports`

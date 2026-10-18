@@ -2,10 +2,18 @@
 
 import unittest
 
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from waifubot.adapters.chat.mock import MockChatModel
+from waifubot.bot.handlers.chat import ChatHandler
 from waifubot.bot.handlers.generate import SpecialCharacterStudioHandler
 from waifubot.bot.panel import PanelEngine
 from waifubot.bot.rate_limiter import FileIdCache, TelegramRateLimiter
 from waifubot.bot.wizard import WizardStore
+from waifubot.db.base import Base
+from waifubot.services.chat.engine import ChatEngine
+from waifubot.services.identity import create_character
+from waifubot.services.ownership import claim_character, set_character_status
 
 
 class TestBotFlow(unittest.IsolatedAsyncioTestCase):
@@ -99,6 +107,88 @@ class TestBotFlow(unittest.IsolatedAsyncioTestCase):
         cache.put(sha, "AgACAgIAAxkBAAI...")
         self.assertEqual(cache.get(sha), "AgACAgIAAxkBAAI...")
         self.assertEqual(len(cache), 1)
+
+    async def test_chat_mode_flow_and_endchat(self) -> None:
+        """User enters companion chat mode, exchanges messages, and exits with /endchat (R63)."""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+        mock_model = MockChatModel(canned_reply="سلام! من برای گفتگو آماده‌ام.")
+        chat_engine = ChatEngine(chat_model=mock_model)
+        chat_handler = ChatHandler()
+
+        user_id = 777
+        async with session_factory() as session:
+            # Setup character and ownership
+            char = await create_character(session, "Aqua", "Water goddess", created_by=1)
+            await set_character_status(session, char.character_id, "listed")
+            await claim_character(session, char.character_id, user_id=user_id)
+
+            # 1. Initially not in chat
+            self.assertFalse(chat_handler.is_in_chat(user_id))
+            reply, handled = await chat_handler.handle_incoming_text(
+                session=session,
+                engine=chat_engine,
+                user_id=user_id,
+                role="user",
+                text="سلام",
+            )
+            self.assertFalse(handled)
+            self.assertIsNone(reply)
+
+            # 2. Enter chat via render_chat_panel
+            text, keyboard = await chat_handler.render_chat_panel(
+                session=session,
+                user_id=user_id,
+                character_id=char.character_id,
+                locale="fa",
+            )
+            self.assertIn("Aqua", text)
+            self.assertTrue(chat_handler.is_in_chat(user_id))
+            self.assertEqual(chat_handler.get_active_character(user_id), char.character_id)
+
+            # 3. Send text while in chat mode
+            reply, handled = await chat_handler.handle_incoming_text(
+                session=session,
+                engine=chat_engine,
+                user_id=user_id,
+                role="user",
+                text="امروز چطوری؟",
+            )
+            self.assertTrue(handled)
+            self.assertEqual(reply, "سلام! من برای گفتگو آماده‌ام.")
+
+            # 4. Persona panel rendering
+            p_text, p_kb = await chat_handler.render_persona_panel(
+                session=session,
+                character_id=char.character_id,
+            )
+            self.assertIn("تنظیمات شخصیت", p_text)
+            self.assertTrue(any("بهینه‌سازی" in b["text"] for row in p_kb for b in row))
+
+            # 5. Memory panel rendering
+            m_text, m_kb = await chat_handler.render_memory_panel(
+                session=session,
+                user_id=user_id,
+                character_id=char.character_id,
+            )
+            self.assertIn("حافظه بلندمدت", m_text)
+
+            # 6. Exit chat mode via /endchat
+            exit_reply, handled = await chat_handler.handle_incoming_text(
+                session=session,
+                engine=chat_engine,
+                user_id=user_id,
+                role="user",
+                text="/endchat",
+            )
+            self.assertTrue(handled)
+            self.assertIn("گفتگو با کاراکتر به پایان رسید", exit_reply or "")
+            self.assertFalse(chat_handler.is_in_chat(user_id))
+
+        await engine.dispose()
 
 
 if __name__ == "__main__":

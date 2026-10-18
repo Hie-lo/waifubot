@@ -9,8 +9,8 @@ from typing import Any
 
 
 def normalize_text(text: str) -> str:
-    """Normalize text using Unicode NFC to unify Persian/Arabic character variants."""
-    return unicodedata.normalize("NFC", text.strip())
+    """Normalize text using Unicode NFC and strip decorative tatweel to unify character variants."""
+    return unicodedata.normalize("NFC", text.replace("\u0640", "").strip())
 
 
 def estimate_tokens(text: str) -> int:
@@ -75,6 +75,64 @@ class ChatMemory:
 
     def append_turn(self, role: str, content: str, timestamp: float) -> None:
         self.window.append(ChatTurn(role=role, content=content, timestamp=timestamp))
+
+    def add_fact(self, fact: str, chat_facts_max: int = 20) -> bool:
+        """Adds a durable fact about user if cap allows."""
+        clean = normalize_text(fact)
+        if clean and clean not in self.facts and len(self.facts) < chat_facts_max:
+            self.facts.append(clean)
+            return True
+        return False
+
+    def remove_fact(self, index: int) -> bool:
+        """Removes a durable fact by 0-based index."""
+        if 0 <= index < len(self.facts):
+            self.facts.pop(index)
+            return True
+        return False
+
+    def reset(self) -> None:
+        """Wipes all memory content for this session (R64)."""
+        self.summary = ""
+        self.facts.clear()
+        self.window.clear()
+
+    def to_prompt_context(self) -> str:
+        """Renders summary and facts into dialogue context block."""
+        blocks = []
+        if self.summary:
+            blocks.append(f"Dialogue Summary:\n{self.summary}")
+        if self.facts:
+            facts_list = "\n".join(f"- {f}" for f in self.facts)
+            blocks.append(f"Durable facts about owner:\n{facts_list}")
+        return "\n\n".join(blocks)
+
+    def apply_compaction(
+        self,
+        compaction_dict: dict[str, Any],
+        turns_compacted_count: int,
+        chat_facts_max: int = 20,
+    ) -> None:
+        """Applies parsed compaction results and trims window turns (R64)."""
+        new_summary = compaction_dict.get("summary")
+        if new_summary:
+            self.summary = str(new_summary).strip()
+
+        # Remove obsolete facts
+        for f in compaction_dict.get("facts_remove", []):
+            clean_f = normalize_text(str(f))
+            if clean_f in self.facts:
+                self.facts.remove(clean_f)
+
+        # Add new facts
+        for f in compaction_dict.get("facts_add", []):
+            clean_f = normalize_text(str(f))
+            if clean_f and clean_f not in self.facts and len(self.facts) < chat_facts_max:
+                self.facts.append(clean_f)
+
+        # Drop compacted turns from the beginning of window
+        if turns_compacted_count > 0:
+            self.window = self.window[turns_compacted_count:]
 
 
 def parse_compaction_response(raw_response: str) -> dict[str, Any]:

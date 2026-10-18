@@ -21,6 +21,17 @@ SETTINGS_REGISTRY: dict[str, dict[str, Any]] = {
     "phash_distance": {"default": 6, "ceiling": 20, "type": int, "min": 0},
     "claim_enabled": {"default": True, "ceiling": True, "type": bool},
     "channel_recheck_hours": {"default": 12, "ceiling": 168, "type": int, "min": 1},
+    "chat_enabled": {"default": True, "ceiling": True, "type": bool},
+    "chat_max_concurrency": {"default": 4, "ceiling": 50, "type": int, "min": 1},
+    "chat_window_turns": {"default": 8, "ceiling": 50, "type": int, "min": 2},
+    "chat_compact_every_turns": {"default": 10, "ceiling": 50, "type": int, "min": 2},
+    "chat_summary_tokens": {"default": 300, "ceiling": 1000, "type": int, "min": 50},
+    "chat_facts_max": {"default": 20, "ceiling": 100, "type": int, "min": 1},
+    "persona_card_tokens": {"default": 300, "ceiling": 1000, "type": int, "min": 50},
+    "chat_max_reply_tokens": {"default": 300, "ceiling": 1000, "type": int, "min": 50},
+    "chat_timeout_seconds": {"default": 30, "ceiling": 120, "type": int, "min": 5},
+    "chat_debounce_ms": {"default": 1200, "ceiling": 10000, "type": int, "min": 100},
+    "chat_cost_alert_usd": {"default": "off", "ceiling": "off", "type": str},
 }
 
 

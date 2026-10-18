@@ -177,6 +177,9 @@ async def release_character(
     if record.owner_user_id != user_id and not is_staff:
         return False, "not_authorized"
 
+    from waifubot.services.chat.session import wipe_character_chat_data
+    from waifubot.services.personas import wipe_character_persona
+
     now = time.time()
     if record.status == "claimed":
         record.status = "listed"
@@ -184,6 +187,8 @@ async def release_character(
         record.claimable = True
         record.released_at = now
         record.updated_at = now
+        await wipe_character_chat_data(session, character_id)
+        await wipe_character_persona(session, character_id)
         await session.flush()
         return True, "released_to_listed"
 
@@ -192,6 +197,8 @@ async def release_character(
         await session.delete(record)
         char_stmt = delete(CharacterRecord).where(CharacterRecord.character_id == character_id)
         await session.execute(char_stmt)
+        await wipe_character_chat_data(session, character_id)
+        await wipe_character_persona(session, character_id)
         await session.flush()
         return True, "deleted"
 

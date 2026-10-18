@@ -74,3 +74,18 @@ def recheck_enhancer_output(original: str, enhanced: str) -> tuple[str, bool, st
 
     # Soft fail: keep original text
     return original, False, reason
+
+
+class SafetyViolationError(Exception):
+    """Raised when a prompt or message violates hard safety rules."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Safety violation: {reason}")
+        self.reason = reason
+
+
+def assert_safe_prompt(text: str) -> None:
+    """Assert that text satisfies hard safety rules, raising SafetyViolationError if not."""
+    is_safe, reason = check_safety(text)
+    if not is_safe:
+        raise SafetyViolationError(reason or "safety_rejected")

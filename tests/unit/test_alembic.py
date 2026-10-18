@@ -50,6 +50,9 @@ class TestAlembicMigrations(unittest.TestCase):
         self.assertIn("channel_topics", tables)
         self.assertIn("character_ownership", tables)
         self.assertIn("claim_posts", tables)
+        self.assertIn("character_personas", tables)
+        self.assertIn("chat_sessions", tables)
+        self.assertIn("chat_memory", tables)
 
         # Test downgrade to base and re-upgrade
         command.downgrade(self.alembic_cfg, "base")

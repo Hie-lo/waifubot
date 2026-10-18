@@ -61,4 +61,8 @@ my_characters_title: "کاراکترهای من ({total} کاراکتر)"
 my_characters_empty: "شما هنوز هیچ کاراکتری ندارید."
 character_released_listed: "کاراکتر {name} رهاسازی شد و به کاتالوگ عمومی بازگشت."
 character_released_deleted: "کاراکتر شخصی {name} برای همیشه حذف گردید."
+chat_mode_active: "حالت گفتگوی زنده با {name} فعال است."
+chat_ended: "گفتگوی زنده با کاراکتر به پایان رسید."
+chat_disabled: "قابلیت گفتگوی متنی در حال حاضر غیرفعال است."
+
 

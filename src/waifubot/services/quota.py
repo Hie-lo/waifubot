@@ -279,6 +279,22 @@ async def refund_reservation(
     await session.flush()
 
 
+async def record_chat_tokens(
+    session: AsyncSession,
+    user_id: int,
+    tokens_in: int,
+    tokens_out: int,
+    app_timezone: str = "Asia/Tehran",
+    now: float | None = None,
+) -> None:
+    """Records input and output token consumption into usage_counters (R65)."""
+    period_key, _ = get_current_period_key(tz_name=app_timezone, now=now)
+    counter = await get_or_create_usage_counter(session, user_id, period_key)
+    counter.tokens_in += tokens_in
+    counter.tokens_out += tokens_out
+    await session.flush()
+
+
 async def get_user_usage_summary(
     session: AsyncSession,
     user_id: int,

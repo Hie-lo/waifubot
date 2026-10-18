@@ -491,3 +491,29 @@ class MyCharactersCallback(CallbackData):
         char_id = parts[1] if len(parts) > 1 else ""
         extra = parts[2] if len(parts) > 2 else ""
         return cls(action=action, char_id=char_id, extra=extra)
+
+
+@registry.register
+class ChatCallback(CallbackData):
+    """Character chat panel and memory callback (panel, end, persona, mem, fact_del, reset) (R63-R65)."""
+
+    prefix = "cht"
+
+    def __init__(self, action: str, char_id: str = "", extra: str = "") -> None:
+        self.action = action
+        self.char_id = char_id
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.char_id}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "ChatCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        char_id = parts[1] if len(parts) > 1 else ""
+        extra = parts[2] if len(parts) > 2 else ""
+        return cls(action=action, char_id=char_id, extra=extra)
