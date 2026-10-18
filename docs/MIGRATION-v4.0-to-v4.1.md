@@ -122,11 +122,11 @@ Real test: `python -m pytest tests/unit/test_channel_verify.py tests/unit/test_c
 
 ## Stage 11 — Character ownership & claiming (R60–R61)
 
-- [ ] Alembic `0013_character_ownership` (backfill existing characters as `draft`) and `claim_posts`
-- [ ] `services/ownership.py`: atomic claim with `max_owned_characters` in the same transaction; release; revoke/reassign
-- [ ] Staff publish option "claimable" (deep-link button on channel posts) and `listed` marking; best-effort "claimed ✅" edit
-- [ ] User screens: catalog (viewer edits in place), 🎲 random with confirmation, *My characters*, create-in-DM (plan-limited, generation charged to the owner)
-- [ ] User card (R50): owned characters list, revoke/reassign; `claim_enabled` toggle
+- [x] Alembic `0013_character_ownership` (backfill existing characters as `draft`) and `claim_posts`
+- [x] `services/ownership.py`: atomic claim with `max_owned_characters` in the same transaction; release; revoke/reassign
+- [x] Staff publish option "claimable" (deep-link button on channel posts) and `listed` marking; best-effort "claimed ✅" edit
+- [x] User screens: catalog (viewer edits in place), 🎲 random with confirmation, *My characters*, create-in-DM (plan-limited, generation charged to the owner)
+- [x] User card (R50): owned characters list, revoke/reassign; `claim_enabled` toggle
 
 Real test: `python -m pytest tests/unit/test_ownership.py tests/unit/test_claim_race.py tests/test_bot_flow.py -q`
 

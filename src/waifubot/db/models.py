@@ -255,3 +255,32 @@ class ChannelTopicRecord(Base):
     )
     topic_id: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class CharacterOwnershipRecord(Base):
+    """Character ownership and claim state (R60, R61)."""
+
+    __tablename__ = "character_ownership"
+
+    character_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default="draft", nullable=False
+    )  # draft | listed | claimed | private
+    owner_user_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
+    claimable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    released_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)
+
+
+class ClaimPostRecord(Base):
+    """Channel post with deep-link claim button for best-effort edit on claim (R61)."""
+
+    __tablename__ = "claim_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    character_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time, nullable=False)

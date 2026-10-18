@@ -108,8 +108,18 @@ class TelegramPublisher(Protocol):
         caption: str = "",
         topic_id: int | None = None,
         has_spoiler: bool = False,
+        reply_markup: Any = None,
     ) -> str:
         """Publishes photo and returns the Telegram file_id (R42)."""
+        ...
+
+    async def edit_message_reply_markup(
+        self,
+        chat_id: int,
+        message_id: int,
+        reply_markup: Any = None,
+    ) -> bool:
+        """Edits message reply markup best-effort (R61)."""
         ...
 
 

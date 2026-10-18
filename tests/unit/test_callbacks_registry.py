@@ -5,9 +5,11 @@ import unittest
 from waifubot.bot.callbacks import (
     AccountCallback,
     AdminCallback,
+    CatalogCallback,
     ChannelCallback,
     GenActionCallback,
     GenCountCallback,
+    MyCharactersCallback,
     MyImagesCallback,
     NavCallback,
     PlanCallback,
@@ -48,6 +50,8 @@ class TestCallbackRegistry(unittest.TestCase):
             MyImagesCallback(action="view", img_id=12345, page=2),
             AccountCallback(action="view", extra=""),
             ChannelCallback(action="view", channel_id=123, extra="reverify"),
+            CatalogCallback(action="claim", char_id="char_12345", page=1),
+            MyCharactersCallback(action="view", char_id="char_12345", extra="release"),
         ]
 
         for cb in sample_callbacks:

@@ -16,6 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from waifubot.bot.callbacks import NavCallback, UserCallback
 from waifubot.bot.telegram_html import bold, code, escape_html
+from waifubot.services.ownership import (
+    list_user_characters,
+    reassign_ownership,
+    revoke_ownership,
+)
 from waifubot.services.scheduler import format_jalali_datetime
 from waifubot.services.users import (
     CannotBlockAdminError,
@@ -202,7 +207,38 @@ class UserManagementHandler:
         if user.note:
             lines.append(f"• یادداشت مدیر: {escape_html(user.note)}")
 
+        # Owned characters section (R50, R60)
+        owned_chars = await list_user_characters(session, user.telegram_id)
+        if owned_chars:
+            lines.append("")
+            lines.append(
+                f"🧬 {bold('کاراکترهای تحت مالکیت:' if locale == 'fa' else 'Owned Characters:')}"
+            )
+            for ch, ow in owned_chars:
+                status_lbl = "شخصی" if ow.status == "private" else "دریافت شده"
+                if locale != "fa":
+                    status_lbl = "Private" if ow.status == "private" else "Claimed"
+                lines.append(
+                    f"• {escape_html(ch.name)} ({status_lbl}) — ID: {code(ch.character_id)}"
+                )
+
         keyboard: list[list[dict[str, Any]]] = []
+
+        # Revoke character buttons for admins (R50, R61)
+        for ch, _ in owned_chars:
+            rev_cb = UserCallback(
+                action="rev_char", target_id=user.telegram_id, extra=ch.character_id
+            )
+            keyboard.append(
+                [
+                    {
+                        "text": f"❌ سلب مالکیت {ch.name}"
+                        if locale == "fa"
+                        else f"❌ Revoke {ch.name}",
+                        "callback_data": rev_cb.pack(),
+                    }
+                ]
+            )
 
         # Block/Unblock button
         if user.status == "blocked":
@@ -302,3 +338,38 @@ class UserManagementHandler:
         if success:
             return True, "رکورد کاربر با موفقیت حذف گردید."
         return False, "کاربر یافت نشد."
+
+    async def handle_revoke_character(
+        self,
+        session: AsyncSession,
+        actor_id: int,
+        character_id: str,
+    ) -> tuple[bool, str]:
+        """Revokes character ownership and returns to catalog (R50, R61)."""
+        success = await revoke_ownership(
+            session=session,
+            character_id=character_id,
+            admin_id=actor_id,
+            new_status="listed",
+        )
+        if success:
+            return True, "مالکیت کاراکتر با موفقیت سلب شد و به کاتالوگ بازگشت."
+        return False, "کاراکتر یافت نشد."
+
+    async def handle_reassign_character(
+        self,
+        session: AsyncSession,
+        actor_id: int,
+        character_id: str,
+        new_owner_id: int,
+    ) -> tuple[bool, str]:
+        """Reassigns character ownership to another user (R50, R61)."""
+        success = await reassign_ownership(
+            session=session,
+            character_id=character_id,
+            new_owner_user_id=new_owner_id,
+            admin_id=actor_id,
+        )
+        if success:
+            return True, f"کاراکتر با موفقیت به کاربر {new_owner_id} واگذار گردید."
+        return False, "کاراکتر یافت نشد."

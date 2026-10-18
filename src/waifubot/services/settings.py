@@ -19,6 +19,8 @@ SETTINGS_REGISTRY: dict[str, dict[str, Any]] = {
     "missed_run_policy": {"default": "catch_up_one", "ceiling": "skip", "type": str},
     "invite_ttl_hours": {"default": 48, "ceiling": 168, "type": int, "min": 1},
     "phash_distance": {"default": 6, "ceiling": 20, "type": int, "min": 0},
+    "claim_enabled": {"default": True, "ceiling": True, "type": bool},
+    "channel_recheck_hours": {"default": 12, "ceiling": 168, "type": int, "min": 1},
 }
 
 

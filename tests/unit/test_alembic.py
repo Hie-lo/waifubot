@@ -48,6 +48,8 @@ class TestAlembicMigrations(unittest.TestCase):
         self.assertIn("usage_counters", tables)
         self.assertIn("channels", tables)
         self.assertIn("channel_topics", tables)
+        self.assertIn("character_ownership", tables)
+        self.assertIn("claim_posts", tables)
 
         # Test downgrade to base and re-upgrade
         command.downgrade(self.alembic_cfg, "base")

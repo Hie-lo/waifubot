@@ -439,3 +439,55 @@ class ChannelCallback(CallbackData):
         channel_id: int | str = int(raw_id) if raw_id.isdigit() else raw_id
         extra = parts[2] if len(parts) > 2 else ""
         return cls(action=action, channel_id=channel_id, extra=extra)
+
+
+@registry.register
+class CatalogCallback(CallbackData):
+    """Catalog viewer and claiming callback (view, page, claim, rand) (R61)."""
+
+    prefix = "clg"
+
+    def __init__(self, action: str, char_id: str = "", page: int = 0) -> None:
+        self.action = action
+        self.char_id = char_id
+        self.page = page
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.char_id}:{self.page}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "CatalogCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        char_id = parts[1] if len(parts) > 1 else ""
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        return cls(action=action, char_id=char_id, page=page)
+
+
+@registry.register
+class MyCharactersCallback(CallbackData):
+    """My characters management callback (list, view, release, confirm) (R60)."""
+
+    prefix = "myc"
+
+    def __init__(self, action: str, char_id: str = "", extra: str = "") -> None:
+        self.action = action
+        self.char_id = char_id
+        self.extra = extra
+
+    def pack(self) -> str:
+        data = f"{self.version}:{self.prefix}:{self.action}:{self.char_id}:{self.extra}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError(f"Callback data exceeds 64 bytes: '{data}'")
+        return data
+
+    @classmethod
+    def unpack(cls, payload: str) -> "MyCharactersCallback":
+        parts = payload.split(":")
+        action = parts[0] if len(parts) > 0 else ""
+        char_id = parts[1] if len(parts) > 1 else ""
+        extra = parts[2] if len(parts) > 2 else ""
+        return cls(action=action, char_id=char_id, extra=extra)
