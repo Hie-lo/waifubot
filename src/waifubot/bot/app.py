@@ -92,7 +92,12 @@ def run_bot() -> None:
 
     from telegram.ext import ApplicationBuilder
 
+    from waifubot.config import load_env
+
+    load_env()
+
     token = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+
     if not token or token in ("mock-token", "your_bot_token_here"):
         print(
             "ERROR: BOT_TOKEN is not configured in .env. Please set a valid Telegram bot token.",

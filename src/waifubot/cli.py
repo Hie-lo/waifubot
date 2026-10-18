@@ -96,7 +96,12 @@ def cli_run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entrypoint."""
+    from waifubot.config import load_env
+
+    load_env()
+
     parser = argparse.ArgumentParser(prog="waifubot", description="WaifuBot management CLI")
+
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # health subcommand

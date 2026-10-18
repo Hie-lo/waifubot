@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import waifubot.db.models  # noqa: F401
 from alembic import context
+from waifubot.config import load_env
 from waifubot.db.base import Base
 
 config = context.config
@@ -18,10 +19,13 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+load_env()
+
 # Support DATABASE_URL or DB_URL environment variable override
 env_db_url = os.environ.get("DATABASE_URL") or os.environ.get("DB_URL")
 if env_db_url:
     config.set_main_option("sqlalchemy.url", env_db_url)
+
 
 # Ensure parent directory exists for SQLite database files
 configured_url = config.get_main_option("sqlalchemy.url")
