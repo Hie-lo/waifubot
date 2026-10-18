@@ -190,6 +190,31 @@ class TestBotFlow(unittest.IsolatedAsyncioTestCase):
 
         await engine.dispose()
 
+    def test_build_bot_app_registers_handlers(self) -> None:
+        """Verify build_bot_app registers commands, messages, callbacks and initializes session."""
+        from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
+
+        from waifubot.bot.app import build_bot_app
+
+        app = build_bot_app(
+            token="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ123456789",
+            db_url="sqlite+aiosqlite:///:memory:",
+            admin_ids=[1001, 1002],
+        )
+        self.assertIn("session_factory", app.bot_data)
+
+        # Check registered handler types
+        handlers = app.handlers.get(0, [])
+        handler_types = [type(h) for h in handlers]
+        self.assertIn(CommandHandler, handler_types)
+        self.assertIn(CallbackQueryHandler, handler_types)
+        self.assertIn(MessageHandler, handler_types)
+
+        # Check command names
+        command_handlers = [h for h in handlers if isinstance(h, CommandHandler)]
+        commands = {list(h.commands)[0] for h in command_handlers if h.commands}
+        self.assertTrue({"start", "status", "endchat"}.issubset(commands))
+
 
 if __name__ == "__main__":
     unittest.main()
