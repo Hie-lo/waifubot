@@ -206,6 +206,85 @@ class TestWorkerPool(unittest.IsolatedAsyncioTestCase):
         finally:
             await pool.stop()
 
+    async def test_worker_pool_progress_and_error_reporting(self) -> None:
+        """WorkerPool sends real-time progress updates and comprehensive failure reports."""
+        sent_messages: list[dict[str, Any]] = []
+        edited_messages: list[dict[str, Any]] = []
+
+        async def mock_msg_sender(chat_id: int, text: str) -> int:
+            msg_id = len(sent_messages) + 1
+            sent_messages.append({"msg_id": msg_id, "chat_id": chat_id, "text": text})
+            return msg_id
+
+        async def mock_msg_editor(chat_id: int, message_id: int, text: str) -> None:
+            edited_messages.append({"msg_id": message_id, "chat_id": chat_id, "text": text})
+
+        # Custom failing provider to test diagnostic error reporting
+        class FailingProvider:
+            name = "failing_test_provider"
+
+            async def generate(self, *args: Any, **kwargs: Any) -> list[bytes]:
+                cb = kwargs.get("progress_callback")
+                if cb:
+                    await cb("در حال اتصال به سرور آزمایشی...")
+                raise RuntimeError("Cloudflare challenge blocked simulation")
+
+        now = time.time()
+        async with self.session_factory() as session, session.begin():
+            session.add(
+                JobRecord(
+                    job_id="pool-job-fail-test",
+                    requester_user_id=303,
+                    admin_id=303,
+                    prompt="failing test prompt",
+                    target_count=2,
+                    needed=2,
+                    status="pending",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        pool = WorkerPool(
+            session_factory=self.session_factory,
+            slot_pool=self.slot_pool,
+            provider=FailingProvider(),  # type: ignore[arg-type]
+            generation_service=self.gen_service,
+            settings_service=self.settings,
+            idle_sleep_seconds=0.05,
+            telegram_message_sender=mock_msg_sender,
+            telegram_message_editor=mock_msg_editor,
+        )
+
+        pool.start()
+        try:
+            deadline = time.time() + 5.0
+            done = False
+            while time.time() < deadline:
+                async with self.session_factory() as session:
+                    res = await session.execute(
+                        select(JobRecord).where(JobRecord.job_id == "pool-job-fail-test")
+                    )
+                    job = res.scalar_one_or_none()
+                    if job and job.status == "failed":
+                        done = True
+                        break
+                await asyncio.sleep(0.1)
+
+            self.assertTrue(done, "Job did not transition to failed status")
+            # Verify progress message was sent
+            self.assertTrue(len(sent_messages) > 0, "No initial progress message sent")
+            self.assertEqual(sent_messages[0]["chat_id"], 303)
+
+            # Verify diagnostic error report was edited into the message
+            self.assertTrue(len(edited_messages) > 0, "No error report was edited into message")
+            error_report_text = edited_messages[-1]["text"]
+            self.assertIn("گزارش خطای تولید تصویر (مانیتورینگ)", error_report_text)
+            self.assertIn("Cloudflare challenge blocked simulation", error_report_text)
+            self.assertIn("سهمیه کسر شده", error_report_text)
+        finally:
+            await pool.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,12 @@ class BrowserSlotPool:
                     if state_file.exists():
                         kwargs["storage_state"] = str(state_file)
                     context = await self._browser.new_context(**kwargs)
+                    if hasattr(context, "add_init_script"):
+                        with suppress(Exception):
+                            await context.add_init_script("""
+                                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                                window.chrome = { runtime: {} };
+                            """)
                     page = await context.new_page()
 
                 slot = BrowserSlot(

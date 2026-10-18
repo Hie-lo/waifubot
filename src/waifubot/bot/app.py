@@ -191,10 +191,15 @@ def build_bot_app(
     from waifubot.adapters.storage.local_fs import LocalFsImageStore
     from waifubot.services.workers import WorkerPool
 
+    headless_env = os.environ.get("PROVIDER_HEADLESS")
+    if headless_env is None:
+        headless_env = os.environ.get("BROWSER_HEADLESS", "true")
+    is_headless = headless_env.lower() in ("true", "1", "yes")
+
     browser_slot_pool = BrowserSlotPool(
         max_contexts=int(os.environ.get("MAX_BROWSER_CONTEXTS", 2)),
         storage_state_dir="storage/browser_sessions",
-        headless=os.environ.get("BROWSER_HEADLESS", "true").lower() in ("true", "1", "yes"),
+        headless=is_headless,
     )
     perchance_provider = PerchanceProvider(
         vision_lab_url=os.environ.get("VISION_LAB_URL", "https://perchance.org/vision-lab-studio"),
@@ -337,15 +342,27 @@ def build_bot_app(
                             ),
                         )
 
-    async def send_user_message(chat_id: int, text: str) -> None:
-        with contextlib.suppress(Exception):
-            await application.bot.send_message(
+    async def send_user_message(chat_id: int, text: str) -> int | None:
+        try:
+            msg = await application.bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 parse_mode="HTML",
                 write_timeout=60.0,
                 read_timeout=60.0,
                 connect_timeout=30.0,
+            )
+            return msg.message_id
+        except Exception:
+            return None
+
+    async def edit_user_message(chat_id: int, message_id: int, text: str) -> None:
+        with contextlib.suppress(Exception):
+            await application.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parse_mode="HTML",
             )
 
     async def on_post_init(app: Application) -> None:
@@ -375,6 +392,7 @@ def build_bot_app(
             image_store=container.image_store,
             telegram_sender=send_user_photo,
             telegram_message_sender=send_user_message,
+            telegram_message_editor=edit_user_message,
         )
         worker_pool.start()
         app.bot_data["worker_pool"] = worker_pool
@@ -1623,8 +1641,20 @@ def build_bot_app(
 
 def run_bot() -> None:
     """Entrypoint to launch the Telegram bot polling loop."""
+    import logging
+    import os
+
+    from waifubot.core.logging import setup_logging
+
+    log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+    setup_logging(log_file="storage/waifubot.log", level=log_level, to_console=True)
+
+    logger = logging.getLogger("waifubot")
+    logger.info("Initializing WaifuBot application...")
+
     application = build_bot_app()
-    print("Starting WaifuBot Telegram bot...")
+    logger.info("Starting WaifuBot Telegram bot polling loop...")
     application.run_polling()
 
 

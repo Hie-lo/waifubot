@@ -35,6 +35,7 @@ class WorkerPool:
         image_store: ImageStore | None = None,
         telegram_sender: Any | None = None,
         telegram_message_sender: Any | None = None,
+        telegram_message_editor: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.slot_pool = slot_pool
@@ -46,6 +47,7 @@ class WorkerPool:
         self.image_store = image_store
         self.telegram_sender = telegram_sender
         self.telegram_message_sender = telegram_message_sender
+        self.telegram_message_editor = telegram_message_editor
 
         self._stop_event = asyncio.Event()
         self._worker_tasks: dict[str, asyncio.Task[None]] = {}
@@ -121,6 +123,8 @@ class WorkerPool:
 
     async def _execute_claimed_job(self, worker_id: str, job_id: str) -> None:
         """Executes a claimed job under exclusive slot and heartbeat."""
+        from waifubot.core.logging import bind_log_context
+
         heartbeat_interval = float(self.settings.get("heartbeat_seconds", 20.0))
         lease_ttl = float(self.settings.get("lease_ttl_seconds", 60.0))
 
@@ -133,151 +137,220 @@ class WorkerPool:
         )
         heartbeat.start()
 
-        try:
-            # Read fresh job record
-            async with self.session_factory() as session:
-                res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
-                record = res.scalar_one()
-                prompt = record.prompt
-                neg_prompt = record.negative_prompt
-                needed = record.needed
-                job_scope = record.job_scope
-                requester_user_id = record.requester_user_id
+        start_time = time.time()
+        progress_msg_id: int | None = None
+        last_reported_status = ""
 
-            # Acquire exclusive slot (R35)
-            async with self.slot_pool.acquire() as slot:
-                image_bytes_list = await self.provider.generate(
-                    prompt=prompt,
-                    negative_prompt=neg_prompt,
-                    needed_count=needed,
-                    slot=slot,
-                    job_scope=job_scope,
-                )
+        with bind_log_context(job_id=job_id, provider=getattr(self.provider, "name", "perchance")):
+            try:
+                # Read fresh job record
+                async with self.session_factory() as session:
+                    res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
+                    record = res.scalar_one()
+                    prompt = record.prompt
+                    neg_prompt = record.negative_prompt
+                    needed = record.needed
+                    job_scope = record.job_scope
+                    requester_user_id = record.requester_user_id
 
-            # Build ImageAsset batch with sha256 content hashes
-            batch_assets = [
-                ImageAsset(
-                    sha256=hashlib.sha256(b).hexdigest(),
-                    content=b,
-                    mime_type="image/png",
-                )
-                for b in image_bytes_list
-            ]
-
-            # Gate evaluation in memory
-            async with self.session_factory() as session, session.begin():
-                res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
-                record = res.scalar_one()
-
-                domain_job = GenerationJob(
-                    job_id=record.job_id,
-                    requester_user_id=record.requester_user_id,
-                    prompt=record.prompt,
-                    target_count=record.target_count,
-                    needed=record.needed,
-                    status=JobStatus(record.status),
-                    run_no=record.run_no,
-                    rounds_done=record.rounds_done,
-                    max_rounds=record.max_rounds,
-                    zero_progress_streak=record.zero_progress_streak,
-                    zero_progress_limit=record.zero_progress_limit,
-                    surplus_dropped=record.surplus_dropped,
-                )
-
-                evaluated_job = self.generation_service.process_batch(domain_job, batch_assets)
-
-                # Commit gate results back to database row
-                record.status = evaluated_job.status.value
-                record.needed = evaluated_job.needed
-                record.rounds_done = evaluated_job.rounds_done
-                record.zero_progress_streak = evaluated_job.zero_progress_streak
-                record.surplus_dropped = evaluated_job.surplus_dropped
-                record.error_code = (
-                    evaluated_job.error_code.value if evaluated_job.error_code else None
-                )
-                record.lease_owner = None
-                record.lease_expires_at = None
-                record.updated_at = time.time()
-
-                # Persist kept images if image_store is configured
-                if self.image_store:
-                    for asset in batch_assets:
-                        if asset.content:
-                            existing_check = await session.execute(
-                                select(ImageRecord.id).where(ImageRecord.image_id == asset.sha256)
+                # Real-time progress updater for Telegram and server logs
+                async def update_user_progress(status_text: str) -> None:
+                    nonlocal progress_msg_id, last_reported_status
+                    if status_text == last_reported_status:
+                        return
+                    last_reported_status = status_text
+                    elapsed = int(time.time() - start_time)
+                    card_text = (
+                        f"⚙️ <b>شناسه کار:</b> <code>{job_id}</code>\n"
+                        f"📊 <b>وضعیت:</b> {status_text}\n"
+                        f"⏱️ <i>زمان سپری شده: {elapsed} ثانیه</i>"
+                    )
+                    if progress_msg_id is not None and self.telegram_message_editor:
+                        with contextlib.suppress(Exception):
+                            await self.telegram_message_editor(
+                                chat_id=requester_user_id,
+                                message_id=progress_msg_id,
+                                text=card_text,
                             )
-                            if existing_check.scalar_one_or_none() is None:
-                                await persist_image_with_provenance(
+                    elif self.telegram_message_sender and progress_msg_id is None:
+                        with contextlib.suppress(Exception):
+                            res = await self.telegram_message_sender(
+                                chat_id=requester_user_id,
+                                text=card_text,
+                            )
+                            if isinstance(res, int):
+                                progress_msg_id = res
+
+                # Send initial progress notification
+                await update_user_progress("در حال آغاز پردازش توسط ورکر...")
+
+                # Acquire exclusive slot (R35)
+                async with self.slot_pool.acquire() as slot:
+                    image_bytes_list = await self.provider.generate(
+                        prompt=prompt,
+                        negative_prompt=neg_prompt,
+                        needed_count=needed,
+                        slot=slot,
+                        job_scope=job_scope,
+                        progress_callback=update_user_progress,
+                    )
+
+                # Build ImageAsset batch with sha256 content hashes
+                batch_assets = [
+                    ImageAsset(
+                        sha256=hashlib.sha256(b).hexdigest(),
+                        content=b,
+                        mime_type="image/png",
+                    )
+                    for b in image_bytes_list
+                ]
+
+                # Gate evaluation in memory
+                async with self.session_factory() as session, session.begin():
+                    res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
+                    record = res.scalar_one()
+
+                    domain_job = GenerationJob(
+                        job_id=record.job_id,
+                        requester_user_id=record.requester_user_id,
+                        prompt=record.prompt,
+                        target_count=record.target_count,
+                        needed=record.needed,
+                        status=JobStatus(record.status),
+                        run_no=record.run_no,
+                        rounds_done=record.rounds_done,
+                        max_rounds=record.max_rounds,
+                        zero_progress_streak=record.zero_progress_streak,
+                        zero_progress_limit=record.zero_progress_limit,
+                        surplus_dropped=record.surplus_dropped,
+                    )
+
+                    evaluated_job = self.generation_service.process_batch(domain_job, batch_assets)
+
+                    # Commit gate results back to database row
+                    record.status = evaluated_job.status.value
+                    record.needed = evaluated_job.needed
+                    record.rounds_done = evaluated_job.rounds_done
+                    record.zero_progress_streak = evaluated_job.zero_progress_streak
+                    record.surplus_dropped = evaluated_job.surplus_dropped
+                    record.error_code = (
+                        evaluated_job.error_code.value if evaluated_job.error_code else None
+                    )
+                    record.lease_owner = None
+                    record.lease_expires_at = None
+                    record.updated_at = time.time()
+
+                    # Persist kept images if image_store is configured
+                    if self.image_store:
+                        for asset in batch_assets:
+                            if asset.content:
+                                existing_check = await session.execute(
+                                    select(ImageRecord.id).where(ImageRecord.image_id == asset.sha256)
+                                )
+                                if existing_check.scalar_one_or_none() is None:
+                                    await persist_image_with_provenance(
+                                        session=session,
+                                        image_store=self.image_store,
+                                        data=asset.content,
+                                        job_id=job_id,
+                                        final_prompt=prompt,
+                                        negative_prompt=neg_prompt,
+                                        provider=getattr(self.provider, "name", "perchance"),
+                                    )
+
+                    # Settle or refund quota
+                    if record.status in ("succeeded", "failed"):
+                        with contextlib.suppress(Exception):
+                            if record.status == "succeeded":
+                                await settle_reservation(
                                     session=session,
-                                    image_store=self.image_store,
-                                    data=asset.content,
-                                    job_id=job_id,
-                                    final_prompt=prompt,
-                                    negative_prompt=neg_prompt,
-                                    provider=getattr(self.provider, "name", "perchance"),
+                                    user_id=record.requester_user_id,
+                                    role="user",
+                                    reserved_amount=record.target_count,
+                                    actual_amount=len(evaluated_job.kept_images) or record.target_count,
+                                )
+                            elif record.status == "failed":
+                                await refund_reservation(
+                                    session=session,
+                                    user_id=record.requester_user_id,
+                                    role="user",
+                                    amount=record.target_count,
                                 )
 
-                # Settle or refund quota
-                if record.status in ("succeeded", "failed"):
+                # Update progress message to finished status
+                elapsed_total = int(time.time() - start_time)
+                if progress_msg_id is not None and self.telegram_message_editor:
                     with contextlib.suppress(Exception):
-                        if record.status == "succeeded":
-                            await settle_reservation(
-                                session=session,
-                                user_id=record.requester_user_id,
-                                role="user",
-                                reserved_amount=record.target_count,
-                                actual_amount=len(evaluated_job.kept_images) or record.target_count,
+                        await self.telegram_message_editor(
+                            chat_id=requester_user_id,
+                            message_id=progress_msg_id,
+                            text=(
+                                f"✅ <b>تولید تصویر با موفقیت به پایان رسید!</b>\n"
+                                f"🆔 <code>{job_id}</code>\n"
+                                f"⏱️ <i>مدت زمان پردازش: {elapsed_total} ثانیه</i>\n"
+                                f"🖼️ در حال ارسال تصاویر به تلگرام..."
+                            ),
+                        )
+
+                # Telegram photo delivery if sender callback provided
+                if self.telegram_sender and batch_assets:
+                    total_imgs = len(batch_assets)
+                    for idx, asset in enumerate(batch_assets, start=1):
+                        with contextlib.suppress(Exception):
+                            await self.telegram_sender(
+                                chat_id=requester_user_id,
+                                photo=asset.content,
+                                caption=f"🎨 تصویر {idx} از {total_imgs}\nپرامپت: {prompt[:100]}",
                             )
-                        elif record.status == "failed":
+            except Exception as exc:
+                import html
+                import logging
+
+                logging.getLogger(__name__).error("Job %s execution failed: %s", job_id, exc)
+                async with self.session_factory() as session, session.begin():
+                    res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
+                    rec = res.scalar_one_or_none()
+                    if rec:
+                        rec.status = "failed"
+                        rec.lease_owner = None
+                        rec.updated_at = time.time()
+                        with contextlib.suppress(Exception):
                             await refund_reservation(
                                 session=session,
-                                user_id=record.requester_user_id,
+                                user_id=rec.requester_user_id,
                                 role="user",
-                                amount=record.target_count,
+                                amount=rec.target_count,
                             )
 
-            # Telegram photo delivery if sender callback provided
-            if self.telegram_sender and batch_assets:
-                total_imgs = len(batch_assets)
-                for idx, asset in enumerate(batch_assets, start=1):
-                    with contextlib.suppress(Exception):
-                        await self.telegram_sender(
-                            chat_id=requester_user_id,
-                            photo=asset.content,
-                            caption=f"🎨 تصویر {idx} از {total_imgs}\nپرامپت: {prompt[:100]}",
+                        safe_exc = html.escape(str(exc))
+                        diagnostic_report = (
+                            f"❌ <b>گزارش خطای تولید تصویر (مانیتورینگ)</b>\n\n"
+                            f"🆔 <b>شناسه کار:</b> <code>{job_id}</code>\n"
+                            f"🌐 <b>سرویس:</b> <i>Perchance ({rec.job_scope})</i>\n"
+                            f"⚠️ <b>پیام سامانه:</b>\n<code>{safe_exc}</code>\n\n"
+                            f"💰 <b>سهمیه کسر شده ({rec.target_count} تصویر) به حساب شما بازگردانده شد.</b>\n\n"
+                            f"💡 <b>راهنمایی عیب‌یابی:</b>\n"
+                            f"۱. در صورت بروز خطای تأیید امنیتی یا ضد ربات Cloudflare، تنظیمات فیلترشکن / پروکسی را بررسی کنید.\n"
+                            f"۲. برای پایداری بیشتر در سرور شخصی می‌توانید <code>PROVIDER_HEADLESS=false</code> را در تنظیمات فعال کنید.\n"
+                            f"۳. چند لحظه صبر کرده و مجدداً تلاش نمایید."
                         )
-        except Exception as exc:
-            import logging
 
-            logging.getLogger(__name__).error("Job %s execution failed: %s", job_id, exc)
-            async with self.session_factory() as session, session.begin():
-                res = await session.execute(select(JobRecord).where(JobRecord.job_id == job_id))
-                rec = res.scalar_one_or_none()
-                if rec:
-                    rec.status = "failed"
-                    rec.lease_owner = None
-                    rec.updated_at = time.time()
-                    with contextlib.suppress(Exception):
-                        await refund_reservation(
-                            session=session,
-                            user_id=rec.requester_user_id,
-                            role="user",
-                            amount=rec.target_count,
-                        )
-                    if self.telegram_message_sender:
-                        with contextlib.suppress(Exception):
-                            await self.telegram_message_sender(
-                                chat_id=rec.requester_user_id,
-                                text=(
-                                    f"⚠️ <b>خطا در پردازش تصویر:</b>\n"
-                                    f"متأسفانه کار تولید تصویر با خطا مواجه شد:\n"
-                                    f"<code>{exc}</code>\n\n"
-                                    f"💰 سهمیه کسر شده به حساب شما بازگردانده شد."
-                                ),
-                            )
-            raise
-        finally:
-            await heartbeat.stop()
+                        if progress_msg_id is not None and self.telegram_message_editor:
+                            with contextlib.suppress(Exception):
+                                await self.telegram_message_editor(
+                                    chat_id=rec.requester_user_id,
+                                    message_id=progress_msg_id,
+                                    text=diagnostic_report,
+                                )
+                        elif self.telegram_message_sender:
+                            with contextlib.suppress(Exception):
+                                await self.telegram_message_sender(
+                                    chat_id=rec.requester_user_id,
+                                    text=diagnostic_report,
+                                )
+                raise
+            finally:
+                await heartbeat.stop()
 
     async def stop(self) -> None:
         """Signals stop and waits for all active workers to terminate."""

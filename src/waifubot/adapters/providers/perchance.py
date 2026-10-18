@@ -465,13 +465,31 @@ class PerchanceProvider:
         target_url = self.vision_lab_url if is_vision_lab else self.text_to_image_url
         is_mock = not hasattr(page, "mouse")
 
+        progress_callback = kwargs.get("progress_callback")
+        last_progress_time = 0.0
+
+        async def notify_progress(stage: str, force: bool = False) -> None:
+            nonlocal last_progress_time
+            now = asyncio.get_event_loop().time()
+            if force or (now - last_progress_time >= 3.0):
+                last_progress_time = now
+                import logging
+
+                logging.getLogger(__name__).info("Generation progress [%s]: %s", target_url, stage)
+                if progress_callback is not None:
+                    with contextlib.suppress(Exception):
+                        await progress_callback(stage)
+
         try:
+            await notify_progress("در حال اتصال و بارگذاری صفحه استودیو...", force=True)
             # 1. Navigate to target generator page if not already there
             curr_url = getattr(page, "url", "")
             if not curr_url.startswith(target_url.split("?")[0]):
+                await notify_progress(f"بارگذاری آدرس {target_url}...")
                 await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
                 await asyncio.sleep(2.0)
 
+            await notify_progress("بررسی وضعیت چالش امنیتی Cloudflare...")
             await self._check_and_handle_challenge(page)
 
             if is_vision_lab:
@@ -549,6 +567,7 @@ class PerchanceProvider:
                     "select#numImages",
                 ]
 
+            await notify_progress("تنظیم گزینه‌ها و آماده‌سازی پرامپت...")
             # 3. Locate prompt input across frames with retry wait
             prompt_input = await self._find_element(page, prompt_selectors, timeout=35.0)
             if prompt_input is None:
@@ -592,6 +611,7 @@ class PerchanceProvider:
             # 9. Sequential generation loop:
             collected_images: list[bytes] = []
             max_clicks = needed_count if is_vision_lab else 1
+            last_seen_queue_status = ""
 
             for click_no in range(max_clicks):
                 if len(collected_images) >= needed_count:
@@ -609,17 +629,78 @@ class PerchanceProvider:
                             prompt,
                         )
 
+                await notify_progress("ارسال دستور ساخت به موتور تولید تصویر...", force=True)
                 await gen_btn.click(timeout=15000)
 
-                # Wait for new image(s) to render
-                deadline = asyncio.get_event_loop().time() + 75.0
+                # Wait for new image(s) to render - up to 150 seconds to allow for Cloudflare anti-bot retry & queue
+                deadline = asyncio.get_event_loop().time() + 150.0
                 new_found = False
 
                 while asyncio.get_event_loop().time() < deadline:
                     await asyncio.sleep(1.5)
+
+                    # 1. Forcibly activate lazy iframes (promote data-src to src and scroll into view)
+                    if hasattr(page, "frames"):
+                        for frame in page.frames:
+                            with contextlib.suppress(Exception):
+                                await frame.evaluate(
+                                    """() => {
+                                        const iframes = document.querySelectorAll(
+                                            '.text-to-image-plugin-image-iframe, iframe[data-src*="image-generation.perchance.org"]'
+                                        );
+                                        for (const el of iframes) {
+                                            if (!el.src && el.dataset.src) {
+                                                el.removeAttribute("srcdoc");
+                                                el.src = el.dataset.src;
+                                            }
+                                            try {
+                                                el.scrollIntoView({ behavior: 'instant', block: 'center' });
+                                            } catch (e) {}
+                                        }
+                                    }"""
+                                )
+
+                    # 2. Check and handle any Cloudflare / Turnstile challenges
                     await self._check_and_handle_challenge(page)
 
-                    # Check output iframe first, then page frames
+                    # 3. Read live queue and waiting status from embed frames
+                    if hasattr(page, "frames"):
+                        for frame in page.frames:
+                            url_f = getattr(frame, "url", "")
+                            if "image-generation" in url_f or "embed" in url_f:
+                                try:
+                                    s_info = await frame.evaluate(
+                                        """() => {
+                                            const wc = document.querySelector('#waitingContentEl, .waitingContent');
+                                            const ws = document.querySelector('#waitingSubtitleEl, .waitingSubtitle');
+                                            return {
+                                                waiting: wc ? wc.innerText.trim() : '',
+                                                sub: ws ? ws.innerText.trim() : ''
+                                            };
+                                        }"""
+                                    )
+                                    w_text = s_info.get("waiting", "")
+                                    sub_text = s_info.get("sub", "")
+                                    if w_text or sub_text:
+                                        raw_status = f"{w_text} {sub_text}".strip()
+                                        last_seen_queue_status = raw_status
+                                        if "Queue" in raw_status:
+                                            m_q = re.search(r"Queue:\s*(\d+/\d+)", raw_status)
+                                            q_display = m_q.group(1) if m_q else raw_status
+                                            await notify_progress(f"⏳ در صف سرور: {q_display}...")
+                                        elif "Processing" in raw_status:
+                                            await notify_progress("🎨 در حال رندر و پردازش نهایی تصویر...")
+                                        elif "Anti-bot" in raw_status or "Verification" in raw_status:
+                                            await notify_progress("🛡️ در حال تأیید امنیتی ضد ربات (Cloudflare)...")
+                                        elif "Waiting" in raw_status or "Starting" in raw_status:
+                                            await notify_progress("⏳ در انتظار نوبت پردازش سرور...")
+                                        elif "Failed" in raw_status:
+                                            await notify_progress(f"⚠️ وضعیت سرور: {raw_status} (در حال تلاش مجدد)...")
+                                        break
+                                except Exception:
+                                    pass
+
+                    # 4. Check output iframe first, then page frames for rendered images
                     extracted: list[tuple[bytes, str]] = []
                     if hasattr(page, "frames"):
                         for frame in page.frames:
@@ -642,6 +723,7 @@ class PerchanceProvider:
                             if len(collected_images) >= needed_count:
                                 break
                         new_found = True
+                        await notify_progress("✅ تصویر با موفقیت از سرور دریافت شد!", force=True)
                         break
 
                 if not new_found:
@@ -663,8 +745,9 @@ class PerchanceProvider:
             if collected_images:
                 return collected_images[:needed_count]
 
+            err_details = f"آخرین وضعیت صف سرور: {last_seen_queue_status}" if last_seen_queue_status else "بدون دریافت تصویر از موتور ساخت"
             raise RuntimeError(
-                f"Generation completed on {target_url} but no valid output images could be retrieved."
+                f"تولید تصویر در {target_url} کامل نشد یا زمان انتظار به پایان رسید.\n{err_details}"
             )
         except Exception as exc:
             import logging
